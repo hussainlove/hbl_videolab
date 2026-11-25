@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="fcBg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0F172A" />
+      <stop offset="100%" stop-color="#07090F" />
+    </linearGradient>
+    <linearGradient id="fcAccent" x1="120" y1="110" x2="400" y2="400" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="55%" stop-color="#60A5FA" />
+      <stop offset="100%" stop-color="#818CF8" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#fcBg)" />
+  <rect x="16" y="16" width="480" height="480" rx="98" stroke="url(#fcAccent)" stroke-opacity="0.28" stroke-width="6" />
+  <!-- Cinema timeline frame + play triangle cut -->
+  <rect x="108" y="128" width="296" height="204" rx="28" fill="#131B2E" stroke="url(#fcAccent)" stroke-width="14" />
+  <path d="M224 180L314 230L224 280V180Z" fill="url(#fcAccent)" />
+  <!-- Timeline playhead track bar -->
+  <rect x="108" y="358" width="296" height="24" rx="12" fill="#1E293B" />
+  <rect x="108" y="358" width="188" height="24" rx="12" fill="url(#fcAccent)" />
+  <circle cx="296" cy="370" r="18" fill="#F8FAFC" stroke="#38BDF8" stroke-width="6" />
+</svg>
