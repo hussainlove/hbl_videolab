@@ -6,10 +6,12 @@ import http from 'http';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { execFile, execFileSync } from 'child_process';
+import { promisify } from 'util';
 import multer from 'multer';
-import ffmpeg from 'fluent-ffmpeg';
-import ffmpegStatic from 'ffmpeg-static';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
+
+const execFileAsync = promisify(execFile);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,23 +19,26 @@ const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT) || 3000;
 const MAX_UPLOAD_BYTES = 250 * 1024 * 1024; // 250 MB
 
-function resolveFfmpegBinary(): string | null {
-  if (typeof ffmpegStatic === 'string' && ffmpegStatic.length > 0 && fs.existsSync(ffmpegStatic)) {
-    return ffmpegStatic;
-  }
-  const systemCandidates = ['/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg'];
-  for (const candidate of systemCandidates) {
+function resolveBinary(name: 'ffmpeg' | 'ffprobe'): string | null {
+  const candidates = [`/usr/bin/${name}`, `/usr/local/bin/${name}`, `/bin/${name}`];
+  for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
       return candidate;
     }
   }
+  try {
+    const found = execFileSync('which', [name], { encoding: 'utf8' }).trim().split(/\r?\n/)[0];
+    if (found && fs.existsSync(found)) {
+      return found;
+    }
+  } catch {
+    // binary not on PATH
+  }
   return null;
 }
 
-const resolvedFfmpegPath = resolveFfmpegBinary();
-if (resolvedFfmpegPath) {
-  ffmpeg.setFfmpegPath(resolvedFfmpegPath);
-}
+const resolvedFfmpegPath = resolveBinary('ffmpeg');
+const resolvedFfprobePath = resolveBinary('ffprobe');
 
 const ALLOWED_AUDIO_MIME_TYPES = new Set([
   'audio/wav',
@@ -316,40 +321,59 @@ async function runFfmpegAudioExtract(
   startOffset: number,
   duration: number | null
 ): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    let command = ffmpeg(inputPath);
-    if (startOffset > 0) {
-      command = command.setStartTime(startOffset);
-    }
-    if (duration !== null && duration > 0) {
-      command = command.setDuration(duration);
-    }
-    command
-      .noVideo()
-      .audioChannels(1)
-      .audioFrequency(16000)
-      .audioCodec('libmp3lame')
-      .audioBitrate('64k')
-      .audioFilters(['highpass=f=80', 'dynaudnorm=f=150:g=15'])
-      .format('mp3')
-      .output(outputPath)
-      .on('end', () => resolve())
-      .on('error', (err: Error) => reject(err))
-      .run();
-  });
+  if (!resolvedFfmpegPath) {
+    throw new Error('FFmpeg binary is unavailable on the server.');
+  }
+  const args: string[] = ['-y'];
+  if (startOffset > 0) {
+    args.push('-ss', String(startOffset));
+  }
+  args.push('-i', inputPath);
+  if (duration !== null && duration > 0) {
+    args.push('-t', String(duration));
+  }
+  args.push(
+    '-vn',
+    '-ac',
+    '1',
+    '-ar',
+    '16000',
+    '-c:a',
+    'libmp3lame',
+    '-b:a',
+    '64k',
+    '-af',
+    'highpass=f=80,dynaudnorm=f=150:g=15',
+    '-f',
+    'mp3',
+    outputPath
+  );
+  try {
+    await execFileAsync(resolvedFfmpegPath, args, { maxBuffer: 10 * 1024 * 1024 });
+  } catch (err) {
+    const e = err as Error & { stderr?: string };
+    const detail = e.stderr?.trim() || e.message || 'FFmpeg execution failed.';
+    throw new Error(detail);
+  }
 }
 
-function getMediaDurationSec(filePath: string): Promise<number | null> {
-  return new Promise((resolve) => {
-    ffmpeg.ffprobe(filePath, (err, metadata) => {
-      if (err) {
-        resolve(null);
-        return;
-      }
-      const dur = Number(metadata?.format?.duration);
-      resolve(Number.isFinite(dur) && dur > 0 ? Number(dur.toFixed(2)) : null);
-    });
-  });
+async function getMediaDurationSec(filePath: string): Promise<number | null> {
+  if (!resolvedFfprobePath) return null;
+  try {
+    const { stdout } = await execFileAsync(resolvedFfprobePath, [
+      '-v',
+      'error',
+      '-show_entries',
+      'format=duration',
+      '-of',
+      'default=noprint_wrappers=1:nokey=1',
+      filePath,
+    ]);
+    const dur = Number(stdout.trim());
+    return Number.isFinite(dur) && dur > 0 ? Number(dur.toFixed(2)) : null;
+  } catch {
+    return null;
+  }
 }
 
 async function startServer() {

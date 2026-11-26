@@ -162,7 +162,13 @@ export function findOrExpandTrackForSpan(
 
 export type AspectRatio = '16:9' | '9:16' | '1:1' | '4:5';
 
-export type KenBurnsPreset = 'none' | 'zoom-in' | 'zoom-out' | 'pan-left' | 'pan-right';
+export type KenBurnsPreset =
+  | 'none'
+  | 'zoom-in'
+  | 'zoom-out'
+  | 'pan-left'
+  | 'pan-right'
+  | 'pan-zoom';
 
 export type FilterPreset = 'neutral' | 'warm-film' | 'cool-slate' | 'mono-contrast' | 'vivid';
 
@@ -902,7 +908,12 @@ export type ClipAnimationPreset =
   | 'heartbeat-loop'
   | 'blink-strobe'
   | 'glitch-jitter'
-  | 'tada-celebrate';
+  | 'tada-celebrate'
+  | 'pan-horizontal'
+  | 'pan-vertical'
+  | 'pan-diagonal'
+  | 'pan-ken-loop'
+  | 'pan-zoom';
 
 export interface AnimationPresetInfo {
   id: ClipAnimationPreset;
@@ -1296,6 +1307,51 @@ export const ANIMATION_PRESETS: AnimationPresetInfo[] = [
     defaultDuration: 0.6,
     builtIn: false,
   },
+  {
+    id: 'pan-horizontal',
+    label: 'Pan Left ↔ Right Loop',
+    category: 'Combo',
+    description: 'Smooth continuous horizontal camera pan loop',
+    accent: '#38BDF8',
+    defaultDuration: 0.8,
+    builtIn: true,
+  },
+  {
+    id: 'pan-vertical',
+    label: 'Pan Up ↕ Down Loop',
+    category: 'Combo',
+    description: 'Smooth continuous vertical tilt pan loop',
+    accent: '#2DD4BF',
+    defaultDuration: 0.8,
+    builtIn: true,
+  },
+  {
+    id: 'pan-diagonal',
+    label: 'Pan Diagonal Drift Loop',
+    category: 'Combo',
+    description: 'Continuous diagonal glide pan across frame',
+    accent: '#A855F7',
+    defaultDuration: 0.8,
+    builtIn: true,
+  },
+  {
+    id: 'pan-ken-loop',
+    label: 'Cinema Pan & Zoom Loop',
+    category: 'Combo',
+    description: 'Slow organic figure-8 pan with subtle zoom',
+    accent: '#F59E0B',
+    defaultDuration: 0.8,
+    builtIn: true,
+  },
+  {
+    id: 'pan-zoom',
+    label: 'Pan & Zoom (Keyframes)',
+    category: 'Combo',
+    description: 'Custom Start & End Scale and Position keyframes for images & videos',
+    accent: '#38BDF8',
+    defaultDuration: 1.0,
+    builtIn: true,
+  },
 ];
 
 export type StickerCategory = 'Social' | 'Reactions' | 'Badges' | 'Arrows';
@@ -1500,6 +1556,295 @@ export const FAMOUS_STICKERS: StickerPresetInfo[] = [
     showBadgeBg: true,
     defaultSize: 114,
     defaultCombo: 'pulse-beat',
+  },
+  {
+    id: 'social-instagram',
+    label: 'INSTAGRAM',
+    emoji: '📸',
+    category: 'Social',
+    kind: 'pill-badge',
+    description: 'Instagram gradient profile & story sticker',
+    primaryColor: '#E1306C',
+    accentColor: '#F77737',
+    textColor: '#FFFFFF',
+    showBadgeBg: true,
+    defaultSize: 116,
+  },
+  {
+    id: 'social-reels',
+    label: 'IG REELS',
+    emoji: '🎬',
+    category: 'Social',
+    kind: 'neon-tag',
+    description: 'Instagram Reels creator badge',
+    primaryColor: '#833AB4',
+    accentColor: '#FD1D1D',
+    textColor: '#FFFFFF',
+    showBadgeBg: true,
+    defaultSize: 116,
+  },
+  {
+    id: 'social-tiktok',
+    label: 'TIKTOK',
+    emoji: '🎵',
+    category: 'Social',
+    kind: 'neon-tag',
+    description: 'TikTok cyan & magenta neon badge',
+    primaryColor: '#25F4EE',
+    accentColor: '#FE2C55',
+    textColor: '#FFFFFF',
+    showBadgeBg: true,
+    defaultSize: 118,
+    defaultCombo: 'pulse-beat',
+  },
+  {
+    id: 'social-youtube',
+    label: 'YOUTUBE',
+    emoji: '▶',
+    category: 'Social',
+    kind: 'pill-badge',
+    description: 'YouTube channel badge pill',
+    primaryColor: '#FF0000',
+    accentColor: '#B91C1C',
+    textColor: '#FFFFFF',
+    showBadgeBg: true,
+    defaultSize: 118,
+  },
+  {
+    id: 'social-shorts',
+    label: 'YT SHORTS',
+    emoji: '⚡',
+    category: 'Social',
+    kind: 'pill-badge',
+    description: 'YouTube Shorts vertical creator tag',
+    primaryColor: '#FF0033',
+    accentColor: '#FB7185',
+    textColor: '#FFFFFF',
+    showBadgeBg: true,
+    defaultSize: 116,
+  },
+  {
+    id: 'social-facebook',
+    label: 'FACEBOOK',
+    emoji: '👍',
+    category: 'Social',
+    kind: 'pill-badge',
+    description: 'Facebook blue page follow sticker',
+    primaryColor: '#1877F2',
+    accentColor: '#38BDF8',
+    textColor: '#FFFFFF',
+    showBadgeBg: true,
+    defaultSize: 116,
+  },
+  {
+    id: 'social-whatsapp',
+    label: 'WHATSAPP',
+    emoji: '💬',
+    category: 'Social',
+    kind: 'pill-badge',
+    description: 'WhatsApp green chat & channel pill',
+    primaryColor: '#25D366',
+    accentColor: '#128C7E',
+    textColor: '#FFFFFF',
+    showBadgeBg: true,
+    defaultSize: 116,
+  },
+  {
+    id: 'social-snapchat',
+    label: 'SNAPCHAT',
+    emoji: '👻',
+    category: 'Social',
+    kind: 'pill-badge',
+    description: 'Snapchat bright yellow ghost badge',
+    primaryColor: '#FFFC00',
+    accentColor: '#FACC15',
+    textColor: '#0F172A',
+    showBadgeBg: true,
+    defaultSize: 116,
+  },
+  {
+    id: 'social-x-twitter',
+    label: 'FOLLOW ON 𝕏',
+    emoji: '𝕏',
+    category: 'Social',
+    kind: 'neon-tag',
+    description: 'X / Twitter handle & thread pill',
+    primaryColor: '#38BDF8',
+    accentColor: '#E2E8F0',
+    textColor: '#FFFFFF',
+    showBadgeBg: true,
+    defaultSize: 114,
+  },
+  {
+    id: 'social-telegram',
+    label: 'TELEGRAM',
+    emoji: '✈️',
+    category: 'Social',
+    kind: 'pill-badge',
+    description: 'Telegram channel join sticker',
+    primaryColor: '#26A5E4',
+    accentColor: '#0284C7',
+    textColor: '#FFFFFF',
+    showBadgeBg: true,
+    defaultSize: 116,
+  },
+  {
+    id: 'social-discord',
+    label: 'DISCORD',
+    emoji: '🎮',
+    category: 'Social',
+    kind: 'pill-badge',
+    description: 'Discord server community invite pill',
+    primaryColor: '#5865F2',
+    accentColor: '#818CF8',
+    textColor: '#FFFFFF',
+    showBadgeBg: true,
+    defaultSize: 116,
+  },
+  {
+    id: 'social-twitch',
+    label: 'TWITCH',
+    emoji: '👾',
+    category: 'Social',
+    kind: 'neon-tag',
+    description: 'Twitch live gaming stream badge',
+    primaryColor: '#9146FF',
+    accentColor: '#C084FC',
+    textColor: '#FFFFFF',
+    showBadgeBg: true,
+    defaultSize: 116,
+  },
+  {
+    id: 'social-linkedin',
+    label: 'LINKEDIN',
+    emoji: '💼',
+    category: 'Social',
+    kind: 'pill-badge',
+    description: 'LinkedIn professional connect sticker',
+    primaryColor: '#0A66C2',
+    accentColor: '#38BDF8',
+    textColor: '#FFFFFF',
+    showBadgeBg: true,
+    defaultSize: 114,
+  },
+  {
+    id: 'social-threads',
+    label: 'THREADS',
+    emoji: '@',
+    category: 'Social',
+    kind: 'neon-tag',
+    description: 'Meta Threads conversation tag',
+    primaryColor: '#E2E8F0',
+    accentColor: '#94A3B8',
+    textColor: '#FFFFFF',
+    showBadgeBg: true,
+    defaultSize: 114,
+  },
+  {
+    id: 'social-pinterest',
+    label: 'PINTEREST',
+    emoji: '📌',
+    category: 'Social',
+    kind: 'pill-badge',
+    description: 'Pinterest board pin callout',
+    primaryColor: '#E60023',
+    accentColor: '#FB7185',
+    textColor: '#FFFFFF',
+    showBadgeBg: true,
+    defaultSize: 114,
+  },
+  {
+    id: 'social-reddit',
+    label: 'REDDIT',
+    emoji: '👽',
+    category: 'Social',
+    kind: 'pill-badge',
+    description: 'Reddit community upvote badge',
+    primaryColor: '#FF4500',
+    accentColor: '#F97316',
+    textColor: '#FFFFFF',
+    showBadgeBg: true,
+    defaultSize: 114,
+  },
+  {
+    id: 'social-spotify',
+    label: 'SPOTIFY',
+    emoji: '🎧',
+    category: 'Social',
+    kind: 'pill-badge',
+    description: 'Spotify podcast & music listen tag',
+    primaryColor: '#1DB954',
+    accentColor: '#15803D',
+    textColor: '#FFFFFF',
+    showBadgeBg: true,
+    defaultSize: 116,
+  },
+  {
+    id: 'social-dm-me',
+    label: 'DM ME',
+    emoji: '✉️',
+    category: 'Social',
+    kind: 'neon-tag',
+    description: 'Direct message CTA sticker',
+    primaryColor: '#6366F1',
+    accentColor: '#EC4899',
+    textColor: '#FFFFFF',
+    showBadgeBg: true,
+    defaultSize: 114,
+  },
+  {
+    id: 'social-tap-here',
+    label: 'TAP HERE',
+    emoji: '👆',
+    category: 'Social',
+    kind: 'pill-badge',
+    description: 'Interactive story tap pointer',
+    primaryColor: '#0EA5E9',
+    accentColor: '#6366F1',
+    textColor: '#FFFFFF',
+    showBadgeBg: true,
+    defaultSize: 114,
+    defaultCombo: 'pop-bounce',
+  },
+  {
+    id: 'social-double-tap',
+    label: 'DOUBLE TAP',
+    emoji: '❤️',
+    category: 'Social',
+    kind: 'pill-badge',
+    description: 'Reels double tap heart CTA',
+    primaryColor: '#E11D48',
+    accentColor: '#F43F5E',
+    textColor: '#FFFFFF',
+    showBadgeBg: true,
+    defaultSize: 114,
+    defaultCombo: 'heartbeat-loop',
+  },
+  {
+    id: 'social-save-post',
+    label: 'SAVE POST',
+    emoji: '🔖',
+    category: 'Social',
+    kind: 'pill-badge',
+    description: 'Bookmark save reel callout',
+    primaryColor: '#F59E0B',
+    accentColor: '#FBBF24',
+    textColor: '#0F172A',
+    showBadgeBg: true,
+    defaultSize: 114,
+  },
+  {
+    id: 'social-repost',
+    label: 'REPOST',
+    emoji: '🔁',
+    category: 'Social',
+    kind: 'pill-badge',
+    description: 'Repost & share viral tag',
+    primaryColor: '#10B981',
+    accentColor: '#34D399',
+    textColor: '#FFFFFF',
+    showBadgeBg: true,
+    defaultSize: 114,
   },
 
   // Viral Reactions & Emojis
@@ -2798,6 +3143,13 @@ export interface TimelineClip {
   frameColor?: string;
   frameThickness?: number;
   keyframes?: ClipKeyframe[];
+  panZoomStartScale?: number;
+  panZoomStartX?: number;
+  panZoomStartY?: number;
+  panZoomEndScale?: number;
+  panZoomEndX?: number;
+  panZoomEndY?: number;
+  panZoomEasing?: KeyframeEasing;
   maskShape?: MaskShape;
   maskCenterX?: number;
   maskCenterY?: number;
@@ -2807,6 +3159,88 @@ export interface TimelineClip {
   maskInvert?: boolean;
   customMaskId?: string;
   customMaskDataUrl?: string;
+}
+
+export function buildPanZoomClipPatch(
+  clip: Pick<
+    TimelineClip,
+    | 'duration'
+    | 'scale'
+    | 'x'
+    | 'y'
+    | 'opacity'
+    | 'rotation'
+    | 'keyframes'
+    | 'panZoomStartScale'
+    | 'panZoomStartX'
+    | 'panZoomStartY'
+    | 'panZoomEndScale'
+    | 'panZoomEndX'
+    | 'panZoomEndY'
+    | 'panZoomEasing'
+  >,
+  overrides?: Partial<{
+    startScale: number;
+    startX: number;
+    startY: number;
+    endScale: number;
+    endX: number;
+    endY: number;
+    easing: KeyframeEasing;
+  }>
+): Partial<TimelineClip> {
+  const dur = Math.max(0.1, Number(clip.duration.toFixed(2)));
+  const startScale = overrides?.startScale ?? clip.panZoomStartScale ?? clip.scale ?? 100;
+  const startX = overrides?.startX ?? clip.panZoomStartX ?? clip.x ?? 0;
+  const startY = overrides?.startY ?? clip.panZoomStartY ?? clip.y ?? 0;
+  const endScale =
+    overrides?.endScale ??
+    clip.panZoomEndScale ??
+    Math.min(400, Math.round((startScale + 22) * 10) / 10);
+  const endX = overrides?.endX ?? clip.panZoomEndX ?? clip.x ?? 0;
+  const endY = overrides?.endY ?? clip.panZoomEndY ?? clip.y ?? 0;
+  const easing: KeyframeEasing = overrides?.easing ?? clip.panZoomEasing ?? 'ease-in-out';
+
+  const existingMiddle = (clip.keyframes ?? []).filter(
+    (k) =>
+      k.id !== 'kf_panzoom_start' &&
+      k.id !== 'kf_panzoom_end' &&
+      k.time > 0.04 &&
+      k.time < dur - 0.04
+  );
+
+  const startKf: ClipKeyframe = {
+    id: 'kf_panzoom_start',
+    time: 0,
+    x: startX,
+    y: startY,
+    scale: startScale,
+    opacity: clip.opacity,
+    rotation: clip.rotation ?? 0,
+    easing,
+  };
+  const endKf: ClipKeyframe = {
+    id: 'kf_panzoom_end',
+    time: dur,
+    x: endX,
+    y: endY,
+    scale: endScale,
+    opacity: clip.opacity,
+    rotation: clip.rotation ?? 0,
+    easing,
+  };
+
+  return {
+    kenBurns: 'pan-zoom',
+    panZoomStartScale: startScale,
+    panZoomStartX: startX,
+    panZoomStartY: startY,
+    panZoomEndScale: endScale,
+    panZoomEndX: endX,
+    panZoomEndY: endY,
+    panZoomEasing: easing,
+    keyframes: [startKf, ...existingMiddle, endKf].sort((a, b) => a.time - b.time),
+  };
 }
 
 export interface ExportSettings {
@@ -2900,5 +3334,420 @@ export type ContextPropertiesTarget =
       config: TextConfig;
     }
   | { kind: 'tool'; toolId: ToolContextId; title: string; description: string; shortcut?: string };
+
+export type TitleTemplateCategory = 'Titles' | 'Lower Thirds';
+
+export interface TitleTemplateItem {
+  id: string;
+  name: string;
+  subtitle: string;
+  category: TitleTemplateCategory;
+  x: number;
+  y: number;
+  duration: number;
+  config: TextConfig;
+  builtIn?: boolean;
+  isCustom?: boolean;
+}
+
+export const TITLE_AND_LOWER_THIRD_TEMPLATES: TitleTemplateItem[] = [
+  // Title Templates
+  {
+    id: 'headline',
+    name: 'Center Headline',
+    subtitle: 'Bold clean display centerpiece',
+    category: 'Titles',
+    builtIn: true,
+    x: 0,
+    y: 0,
+    duration: 3.0,
+    config: {
+      text: 'Main Sequence Title',
+      fontFamily: 'Plus Jakarta Sans',
+      fontSize: 68,
+      fontWeight: 700,
+      color: '#FFFFFF',
+      align: 'center',
+      hasScrim: false,
+      scrimOpacity: 60,
+      animation: 'slide-up',
+      captionOutlineWidth: 0,
+      captionOutlineColor: '#050608',
+    },
+  },
+  {
+    id: 'serif-chapter',
+    name: 'Editorial Serif',
+    subtitle: 'Cinema chapter card typography',
+    category: 'Titles',
+    x: 0,
+    y: -4,
+    duration: 3.5,
+    config: {
+      text: 'Chapter One\nQuiet Horizon',
+      fontFamily: 'Playfair Display',
+      fontSize: 64,
+      fontWeight: 600,
+      color: '#FFFBEB',
+      align: 'center',
+      hasScrim: false,
+      scrimOpacity: 50,
+      animation: 'scale',
+    },
+  },
+  {
+    id: 'kinetic-impact',
+    name: 'Condensed Impact',
+    subtitle: 'Athletic bold uppercase opener',
+    category: 'Titles',
+    x: 0,
+    y: 0,
+    duration: 2.5,
+    config: {
+      text: 'BUILT FOR SPEED',
+      fontFamily: 'Oswald',
+      fontSize: 78,
+      fontWeight: 700,
+      color: '#FFFFFF',
+      align: 'center',
+      hasScrim: true,
+      scrimOpacity: 55,
+      captionBgColor: '#090B10',
+      animation: 'scale',
+    },
+  },
+  {
+    id: 'neon-cyber-title',
+    name: 'Neon Cyber Glow',
+    subtitle: 'Electric blue & outline display',
+    category: 'Titles',
+    x: 0,
+    y: 0,
+    duration: 3.0,
+    config: {
+      text: 'FUTURE VISION',
+      fontFamily: 'Oswald',
+      fontSize: 74,
+      fontWeight: 700,
+      color: '#38BDF8',
+      align: 'center',
+      hasScrim: true,
+      scrimOpacity: 68,
+      captionBgColor: '#060A14',
+      captionOutlineColor: '#FFFFFF',
+      captionOutlineWidth: 2,
+      animation: 'scale',
+    },
+  },
+  {
+    id: 'gold-luxury-title',
+    name: 'Gold Luxury Title',
+    subtitle: 'Warm gold serif cinematic header',
+    category: 'Titles',
+    x: 0,
+    y: -2,
+    duration: 3.5,
+    config: {
+      text: 'GRAND PREMIERE\n2026 EDITION',
+      fontFamily: 'Playfair Display',
+      fontSize: 62,
+      fontWeight: 700,
+      color: '#FDE047',
+      align: 'center',
+      hasScrim: true,
+      scrimOpacity: 52,
+      captionBgColor: '#0F0B04',
+      captionOutlineColor: '#78350F',
+      captionOutlineWidth: 2,
+      animation: 'fade',
+    },
+  },
+  {
+    id: 'youtube-hook-title',
+    name: 'Viral Hook Banner',
+    subtitle: 'High-contrast creator intro hook',
+    category: 'Titles',
+    x: 0,
+    y: -8,
+    duration: 2.5,
+    config: {
+      text: 'WAIT FOR THE END!',
+      fontFamily: 'Plus Jakarta Sans',
+      fontSize: 64,
+      fontWeight: 700,
+      color: '#FACC15',
+      align: 'center',
+      hasScrim: true,
+      scrimOpacity: 86,
+      captionBgColor: '#DC2626',
+      captionOutlineColor: '#050608',
+      captionOutlineWidth: 3,
+      animation: 'scale',
+    },
+  },
+  {
+    id: 'doc-quote-card',
+    name: 'Documentary Quote',
+    subtitle: 'Editorial stacked quote block',
+    category: 'Titles',
+    x: 0,
+    y: 0,
+    duration: 4.0,
+    config: {
+      text: '“Every frame tells\na deeper story.”',
+      fontFamily: 'Playfair Display',
+      fontSize: 52,
+      fontWeight: 500,
+      color: '#F8FAFC',
+      align: 'center',
+      hasScrim: true,
+      scrimOpacity: 64,
+      captionBgColor: '#090D16',
+      animation: 'fade',
+    },
+  },
+  {
+    id: 'urdu-arabic-title',
+    name: 'Urdu / Arabic Center Title',
+    subtitle: 'RTL Nastaliq / Naskh centerpiece',
+    category: 'Titles',
+    x: 0,
+    y: 0,
+    duration: 3.5,
+    config: {
+      text: 'خوش آمدید · نیا سفر',
+      fontFamily: 'Noto Nastaliq Urdu',
+      fontSize: 58,
+      fontWeight: 700,
+      color: '#FFFFFF',
+      align: 'center',
+      hasScrim: true,
+      scrimOpacity: 62,
+      captionBgColor: '#07090F',
+      textDirection: 'rtl',
+      animation: 'fade',
+    },
+  },
+
+  // Lower Third Formats
+  {
+    id: 'lower-third',
+    name: 'Lower Third · Monospace',
+    subtitle: 'Editorial location & timestamp bar',
+    category: 'Lower Thirds',
+    builtIn: true,
+    x: -28,
+    y: 34,
+    duration: 4.0,
+    config: {
+      text: 'Location  ·  04:20 PM',
+      fontFamily: 'JetBrains Mono',
+      fontSize: 30,
+      fontWeight: 500,
+      color: '#F8FAFC',
+      align: 'left',
+      hasScrim: true,
+      scrimOpacity: 78,
+      captionBgColor: '#090B10',
+      animation: 'slide-up',
+    },
+  },
+  {
+    id: 'lt-speaker-name',
+    name: 'Lower Third · Speaker Name',
+    subtitle: 'Two-line name & designation card',
+    category: 'Lower Thirds',
+    x: -26,
+    y: 33,
+    duration: 4.5,
+    config: {
+      text: 'ALEX MERCER\nCreative Director · Studio Lab',
+      fontFamily: 'Plus Jakarta Sans',
+      fontSize: 34,
+      fontWeight: 700,
+      color: '#FFFFFF',
+      align: 'left',
+      hasScrim: true,
+      scrimOpacity: 84,
+      captionBgColor: '#0F172A',
+      captionOutlineColor: '#38BDF8',
+      captionOutlineWidth: 1,
+      animation: 'slide-up',
+    },
+  },
+  {
+    id: 'lt-breaking-news',
+    name: 'Lower Third · Breaking News',
+    subtitle: 'Bold broadcast news red banner',
+    category: 'Lower Thirds',
+    x: -22,
+    y: 35,
+    duration: 4.5,
+    config: {
+      text: 'BREAKING NEWS\nLive coverage from downtown studio',
+      fontFamily: 'Oswald',
+      fontSize: 36,
+      fontWeight: 700,
+      color: '#FFFFFF',
+      align: 'left',
+      hasScrim: true,
+      scrimOpacity: 92,
+      captionBgColor: '#B91C1C',
+      captionOutlineColor: '#050608',
+      captionOutlineWidth: 1,
+      animation: 'slide-up',
+    },
+  },
+  {
+    id: 'lt-social-handle',
+    name: 'Lower Third · Social Handle',
+    subtitle: 'Creator @handle & subscribe bar',
+    category: 'Lower Thirds',
+    x: -28,
+    y: 34,
+    duration: 4.0,
+    config: {
+      text: '@YourChannel\nFollow for daily edits',
+      fontFamily: 'Plus Jakarta Sans',
+      fontSize: 32,
+      fontWeight: 700,
+      color: '#38BDF8',
+      align: 'left',
+      hasScrim: true,
+      scrimOpacity: 86,
+      captionBgColor: '#070B14',
+      animation: 'scale',
+    },
+  },
+  {
+    id: 'lt-podcast-guest',
+    name: 'Lower Third · Podcast Guest',
+    subtitle: 'Warm amber interview lower third',
+    category: 'Lower Thirds',
+    x: -26,
+    y: 34,
+    duration: 4.5,
+    config: {
+      text: 'GUEST INTERVIEW\nEpisode 42 · Full Talk',
+      fontFamily: 'Playfair Display',
+      fontSize: 34,
+      fontWeight: 600,
+      color: '#FDE68A',
+      align: 'left',
+      hasScrim: true,
+      scrimOpacity: 84,
+      captionBgColor: '#1C140A',
+      animation: 'fade',
+    },
+  },
+  {
+    id: 'lt-chapter-step',
+    name: 'Lower Third · Step / Chapter',
+    subtitle: 'Tutorial step progress tag',
+    category: 'Lower Thirds',
+    x: -28,
+    y: 34,
+    duration: 3.5,
+    config: {
+      text: 'STEP 01  ·  SETUP GUIDE',
+      fontFamily: 'JetBrains Mono',
+      fontSize: 30,
+      fontWeight: 700,
+      color: '#34D399',
+      align: 'left',
+      hasScrim: true,
+      scrimOpacity: 86,
+      captionBgColor: '#061A14',
+      animation: 'slide-up',
+    },
+  },
+  {
+    id: 'lt-minimal-glass',
+    name: 'Lower Third · Minimal Glass',
+    subtitle: 'Clean subtle lower-center credit',
+    category: 'Lower Thirds',
+    x: 0,
+    y: 36,
+    duration: 4.0,
+    config: {
+      text: 'Directed & Edited by HBL Studio',
+      fontFamily: 'Plus Jakarta Sans',
+      fontSize: 28,
+      fontWeight: 600,
+      color: '#F1F5F9',
+      align: 'center',
+      hasScrim: true,
+      scrimOpacity: 70,
+      captionBgColor: '#090B10',
+      animation: 'fade',
+    },
+  },
+  {
+    id: 'lt-urdu-news',
+    name: 'Lower Third · Urdu News RTL',
+    subtitle: 'Right-aligned Urdu broadcast ticker',
+    category: 'Lower Thirds',
+    x: 24,
+    y: 34,
+    duration: 4.5,
+    config: {
+      text: 'تازہ ترین خبر · براہِ راست نشریات',
+      fontFamily: 'Noto Nastaliq Urdu',
+      fontSize: 34,
+      fontWeight: 700,
+      color: '#FEF08A',
+      align: 'right',
+      hasScrim: true,
+      scrimOpacity: 90,
+      captionBgColor: '#991B1B',
+      textDirection: 'rtl',
+      animation: 'slide-up',
+    },
+  },
+  {
+    id: 'lt-youtube-subscribe',
+    name: 'Lower Third · Subscribe CTA',
+    subtitle: 'Creator channel bell & subscribe bar',
+    category: 'Lower Thirds',
+    x: -26,
+    y: 34,
+    duration: 4.0,
+    config: {
+      text: 'SUBSCRIBE NOW  ·  NEW VIDEOS WEEKLY',
+      fontFamily: 'Oswald',
+      fontSize: 32,
+      fontWeight: 700,
+      color: '#FFFFFF',
+      align: 'left',
+      hasScrim: true,
+      scrimOpacity: 92,
+      captionBgColor: '#DC2626',
+      captionOutlineColor: '#050608',
+      captionOutlineWidth: 1,
+      animation: 'slide-up',
+    },
+  },
+  {
+    id: 'lt-live-ticker',
+    name: 'Lower Third · Live Update Bar',
+    subtitle: 'Broadcast accent cyan live status bar',
+    category: 'Lower Thirds',
+    x: 0,
+    y: 36,
+    duration: 4.5,
+    config: {
+      text: 'LIVE STUDIO  |  HIGHLIGHTS & REPLAY',
+      fontFamily: 'JetBrains Mono',
+      fontSize: 28,
+      fontWeight: 700,
+      color: '#22D3EE',
+      align: 'center',
+      hasScrim: true,
+      scrimOpacity: 88,
+      captionBgColor: '#060A14',
+      animation: 'fade',
+    },
+  },
+];
 
 

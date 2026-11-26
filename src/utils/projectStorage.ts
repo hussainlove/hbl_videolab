@@ -31,6 +31,8 @@ export interface StoredProjectRecord extends PersistedProjectState {
   updatedAt: number;
   hasSavedOnce?: boolean;
   savedFileName?: string | null;
+  savedFolderPath?: string | null;
+  lastAutoSavedAt?: number | null;
 }
 
 interface LegacyProjectStateRow extends PersistedProjectState {
@@ -70,12 +72,299 @@ export interface SaveFileHandleLike {
   requestPermission?: (desc?: { mode?: 'read' | 'readwrite' }) => Promise<'granted' | 'denied' | 'prompt'>;
 }
 
+export interface SaveDirectoryHandleLike {
+  name: string;
+  getFileHandle: (
+    name: string,
+    options?: { create?: boolean }
+  ) => Promise<SaveFileHandleLike>;
+  getDirectoryHandle?: (
+    name: string,
+    options?: { create?: boolean }
+  ) => Promise<SaveDirectoryHandleLike>;
+  queryPermission?: (desc?: { mode?: 'read' | 'readwrite' }) => Promise<'granted' | 'denied' | 'prompt'>;
+  requestPermission?: (desc?: { mode?: 'read' | 'readwrite' }) => Promise<'granted' | 'denied' | 'prompt'>;
+}
+
 export interface StoredSaveTarget {
   id: string;
   handle: SaveFileHandleLike | null;
+  dirHandle?: SaveDirectoryHandleLike | null;
   fileName: string | null;
+  folderPath?: string | null;
   hasSavedOnce: boolean;
   updatedAt: number;
+}
+
+export interface ProjectFolderLinkEntry {
+  projectId: string;
+  projectName: string;
+  folderPath: string;
+  fileName: string;
+  storageKey: string;
+  hasSystemFolderHandle: boolean;
+  linkedAt: number;
+  lastSyncedAt: number;
+}
+
+interface LinkedFolderLocalSnapshot {
+  app: 'Framecut';
+  projectId: string;
+  projectName: string;
+  folderPath: string;
+  fileName: string;
+  aspectRatio: AspectRatio;
+  fps: 24 | 30 | 60;
+  currentTime: number;
+  clips: TimelineClip[];
+  assets: Array<Pick<MediaAsset, 'id' | 'name' | 'type' | 'duration' | 'width' | 'height'>>;
+  trackSettings?: TrackSettingsMap;
+  extraTrackIds?: string[];
+  updatedAt: number;
+  lastAutoSavedAt?: number | null;
+}
+
+const PROJECT_FOLDER_LINKS_LS_KEY = 'hbl.projectFolderLinks.v1';
+const FOLDER_PATH_INDEX_LS_KEY = 'hbl.folderPathIndex.v1';
+const LAST_LINKED_FOLDER_LS_KEY = 'hbl.lastLinkedFolderPath.v1';
+const LINKED_FOLDER_PROJECT_PREFIX = 'hbl.linkedFolderProject.v1::';
+
+export function normalizeFolderPath(
+  rawPath: string | null | undefined,
+  fallback = 'HBL-Projects'
+): string {
+  const cleaned = (rawPath ?? '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/\/{2,}/g, '/')
+    .replace(/^\/+|\/+$/g, '');
+  return cleaned || fallback;
+}
+
+function readLocalStorageJson<T>(key: string, fallback: T): T {
+  try {
+    if (typeof localStorage === 'undefined') return fallback;
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeLocalStorageJson(key: string, value: unknown): boolean {
+  try {
+    if (typeof localStorage === 'undefined') return false;
+    localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function getAllProjectFolderLinksFromLocalStorage(): Record<string, ProjectFolderLinkEntry> {
+  const parsed = readLocalStorageJson<Record<string, ProjectFolderLinkEntry>>(
+    PROJECT_FOLDER_LINKS_LS_KEY,
+    {}
+  );
+  return parsed && typeof parsed === 'object' ? parsed : {};
+}
+
+export function getProjectFolderLinkFromLocalStorage(
+  projectId: string
+): ProjectFolderLinkEntry | null {
+  if (!projectId) return null;
+  const all = getAllProjectFolderLinksFromLocalStorage();
+  return all[projectId] ?? null;
+}
+
+export function getLastLinkedFolderPathFromLocalStorage(): string | null {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const val = localStorage.getItem(LAST_LINKED_FOLDER_LS_KEY);
+    return val && val.trim() ? val.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLinkedFolderSnapshotToLocalStorage(
+  record: StoredProjectRecord,
+  folderPath: string,
+  fileName: string,
+  storageKey: string
+): void {
+  const snapshot: LinkedFolderLocalSnapshot = {
+    app: 'Framecut',
+    projectId: record.id,
+    projectName: record.projectName,
+    folderPath,
+    fileName,
+    aspectRatio: record.aspectRatio,
+    fps: record.fps,
+    currentTime: record.currentTime,
+    clips: record.clips,
+    assets: (record.assets ?? []).map((a) => ({
+      id: a.id,
+      name: a.name,
+      type: a.type,
+      duration: a.duration,
+      width: a.width,
+      height: a.height,
+    })),
+    trackSettings: record.trackSettings,
+    extraTrackIds: record.extraTrackIds,
+    updatedAt: record.updatedAt,
+    lastAutoSavedAt: record.lastAutoSavedAt ?? null,
+  };
+
+  if (writeLocalStorageJson(storageKey, snapshot)) {
+    return;
+  }
+
+  // Fallback compact summary if timeline exceeds localStorage ~5MB quota
+  const compactSnapshot = {
+    app: 'Framecut',
+    projectId: record.id,
+    projectName: record.projectName,
+    folderPath,
+    fileName,
+    aspectRatio: record.aspectRatio,
+    fps: record.fps,
+    currentTime: record.currentTime,
+    clipCount: record.clips.length,
+    assetCount: record.assets.length,
+    updatedAt: record.updatedAt,
+    lastAutoSavedAt: record.lastAutoSavedAt ?? null,
+  };
+  writeLocalStorageJson(storageKey, compactSnapshot);
+}
+
+export function linkProjectFolderInLocalStorage(
+  record: StoredProjectRecord,
+  opts: {
+    folderPath: string;
+    fileName: string;
+    hasSystemFolderHandle?: boolean;
+  }
+): ProjectFolderLinkEntry | null {
+  if (typeof localStorage === 'undefined' || !record?.id) return null;
+
+  const cleanFolder = normalizeFolderPath(opts.folderPath, 'HBL-Projects');
+  const cleanFile = (opts.fileName || `${record.projectName || 'framecut-project'}.framecut.json`).trim();
+  const storageKey = `${LINKED_FOLDER_PROJECT_PREFIX}${record.id}`;
+  const now = Date.now();
+
+  const links = { ...getAllProjectFolderLinksFromLocalStorage() };
+  const existing = links[record.id];
+  const entry: ProjectFolderLinkEntry = {
+    projectId: record.id,
+    projectName: record.projectName || 'Untitled Sequence',
+    folderPath: cleanFolder,
+    fileName: cleanFile,
+    storageKey,
+    hasSystemFolderHandle: opts.hasSystemFolderHandle ?? existing?.hasSystemFolderHandle ?? false,
+    linkedAt: existing?.linkedAt ?? now,
+    lastSyncedAt: now,
+  };
+  links[record.id] = entry;
+  writeLocalStorageJson(PROJECT_FOLDER_LINKS_LS_KEY, links);
+
+  const folderIndex = {
+    ...readLocalStorageJson<Record<string, string[]>>(FOLDER_PATH_INDEX_LS_KEY, {}),
+  };
+  for (const [dir, ids] of Object.entries(folderIndex)) {
+    if (dir !== cleanFolder && Array.isArray(ids) && ids.includes(record.id)) {
+      const filtered = ids.filter((id) => id !== record.id);
+      if (filtered.length > 0) {
+        folderIndex[dir] = filtered;
+      } else {
+        delete folderIndex[dir];
+      }
+    }
+  }
+  const currentIds = Array.isArray(folderIndex[cleanFolder]) ? folderIndex[cleanFolder] : [];
+  if (!currentIds.includes(record.id)) {
+    folderIndex[cleanFolder] = [...currentIds, record.id];
+  }
+  writeLocalStorageJson(FOLDER_PATH_INDEX_LS_KEY, folderIndex);
+
+  try {
+    localStorage.setItem(LAST_LINKED_FOLDER_LS_KEY, cleanFolder);
+  } catch {
+    // ignore quota error
+  }
+
+  writeLinkedFolderSnapshotToLocalStorage(record, cleanFolder, cleanFile, storageKey);
+  return entry;
+}
+
+export function syncLinkedFolderLocalStorage(
+  record: StoredProjectRecord,
+  hasSystemFolderHandle?: boolean
+): void {
+  if (!record?.id) return;
+  const existing = getProjectFolderLinkFromLocalStorage(record.id);
+  const folderPath = record.savedFolderPath || existing?.folderPath;
+  if (!folderPath) return;
+
+  const fileName =
+    record.savedFileName ||
+    existing?.fileName ||
+    `${(record.projectName || 'framecut-project').trim().replace(/[^a-zA-Z0-9._-]+/g, '-') || 'framecut-project'}.framecut.json`;
+
+  linkProjectFolderInLocalStorage(record, {
+    folderPath,
+    fileName,
+    hasSystemFolderHandle: hasSystemFolderHandle ?? existing?.hasSystemFolderHandle,
+  });
+}
+
+export function unlinkProjectFolderFromLocalStorage(projectId: string): void {
+  if (typeof localStorage === 'undefined' || !projectId) return;
+  const links = { ...getAllProjectFolderLinksFromLocalStorage() };
+  const removed = links[projectId];
+  if (removed) {
+    delete links[projectId];
+    writeLocalStorageJson(PROJECT_FOLDER_LINKS_LS_KEY, links);
+  }
+
+  const folderIndex = {
+    ...readLocalStorageJson<Record<string, string[]>>(FOLDER_PATH_INDEX_LS_KEY, {}),
+  };
+  let indexChanged = false;
+  for (const [dir, ids] of Object.entries(folderIndex)) {
+    if (Array.isArray(ids) && ids.includes(projectId)) {
+      const next = ids.filter((id) => id !== projectId);
+      if (next.length > 0) {
+        folderIndex[dir] = next;
+      } else {
+        delete folderIndex[dir];
+      }
+      indexChanged = true;
+    }
+  }
+  if (indexChanged) {
+    writeLocalStorageJson(FOLDER_PATH_INDEX_LS_KEY, folderIndex);
+  }
+
+  try {
+    localStorage.removeItem(`${LINKED_FOLDER_PROJECT_PREFIX}${projectId}`);
+  } catch {
+    // ignore
+  }
+}
+
+export function exportProjectJsonDownload(jsonContent: string, fileName: string): void {
+  const blob = new Blob([jsonContent], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
 function openProjectDb(): Promise<IDBDatabase> {
@@ -121,7 +410,9 @@ export async function requestPersistentBrowserStorage(): Promise<void> {
 export async function saveFileTargetToDb(
   target: {
     handle: SaveFileHandleLike | null;
+    dirHandle?: SaveDirectoryHandleLike | null;
     fileName: string | null;
+    folderPath?: string | null;
     hasSavedOnce: boolean;
   },
   projectId = 'active_target'
@@ -134,7 +425,9 @@ export async function saveFileTargetToDb(
       const row: StoredSaveTarget = {
         id: projectId,
         handle: target.handle,
+        dirHandle: target.dirHandle ?? null,
         fileName: target.fileName,
+        folderPath: target.folderPath ?? null,
         hasSavedOnce: target.hasSavedOnce,
         updatedAt: Date.now(),
       };
@@ -358,6 +651,37 @@ export async function saveMediaBlobToDb(
   }
 }
 
+export async function saveMediaBlobsToDb(
+  entries: Array<{ assetId: string; blob: Blob; name: string }>
+): Promise<void> {
+  if (entries.length === 0) return;
+  const CHUNK_SIZE = 100;
+  try {
+    const db = await openProjectDb();
+    for (let i = 0; i < entries.length; i += CHUNK_SIZE) {
+      const chunk = entries.slice(i, i + CHUNK_SIZE);
+      await new Promise<void>((resolve) => {
+        const tx = db.transaction(MEDIA_STORE, 'readwrite');
+        const store = tx.objectStore(MEDIA_STORE);
+        for (const item of chunk) {
+          const row: MediaBlobRow = {
+            id: item.assetId,
+            blob: item.blob,
+            name: item.name,
+            type: item.blob.type,
+          };
+          store.put(row);
+        }
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      });
+    }
+    db.close();
+  } catch {
+    // Graceful fallback if storage quota is exceeded
+  }
+}
+
 /**
  * Only deletes media blobs that are NOT referenced by ANY saved project in IndexedDB.
  * Never removes assets still belonging to any other saved project.
@@ -564,7 +888,19 @@ export async function bootstrapProjectsFromDb(): Promise<{
 
       tx.oncomplete = () => {
         const needsLegacyMigration = Boolean(legacyState && !meta?.legacyMigrated);
-        let finalProjects = [...allProjects];
+        const folderLinks = getAllProjectFolderLinksFromLocalStorage();
+        const mergeFolderLink = (p: StoredProjectRecord): StoredProjectRecord => {
+          const link = folderLinks[p.id];
+          if (!link) return p;
+          return {
+            ...p,
+            hasSavedOnce: p.hasSavedOnce ?? true,
+            savedFileName: p.savedFileName ?? link.fileName,
+            savedFolderPath: p.savedFolderPath ?? link.folderPath,
+          };
+        };
+
+        let finalProjects = allProjects.map(mergeFolderLink);
         let currentId = meta?.currentProjectId ?? null;
         let sampleSeeded = meta?.sampleSeeded ?? false;
         let legacyMigrated = meta?.legacyMigrated ?? false;
@@ -583,6 +919,7 @@ export async function bootstrapProjectsFromDb(): Promise<{
             updatedAt: legacyState.updatedAt || Date.now(),
             hasSavedOnce: legacyTarget?.hasSavedOnce ?? false,
             savedFileName: legacyTarget?.fileName ?? null,
+            savedFolderPath: legacyTarget?.folderPath ?? null,
           };
 
           const writeTx = db.transaction(
@@ -701,7 +1038,19 @@ export async function listProjectsFromDb(): Promise<StoredProjectRecord[]> {
         reject(tx.error);
       };
     });
-    return list.sort((a, b) => b.updatedAt - a.updatedAt);
+    const folderLinks = getAllProjectFolderLinksFromLocalStorage();
+    return list
+      .map((p) => {
+        const link = folderLinks[p.id];
+        if (!link) return p;
+        return {
+          ...p,
+          hasSavedOnce: p.hasSavedOnce ?? true,
+          savedFileName: p.savedFileName ?? link.fileName,
+          savedFolderPath: p.savedFolderPath ?? link.folderPath,
+        };
+      })
+      .sort((a, b) => b.updatedAt - a.updatedAt);
   } catch {
     return [];
   }
@@ -740,6 +1089,7 @@ export async function openProjectRecordFromDb(
 
     if (!project) return null;
 
+    const folderLink = getProjectFolderLinkFromLocalStorage(project.id);
     const blobMap = new Map(mediaRows.map((m) => [m.id, m.blob]));
     const restoredAssets = hydrateProjectAssetsFromBlobs(project.assets ?? [], blobMap);
 
@@ -751,6 +1101,9 @@ export async function openProjectRecordFromDb(
       currentTime: Number.isFinite(project.currentTime) ? project.currentTime : 0,
       assets: restoredAssets,
       clips: Array.isArray(project.clips) ? project.clips : [],
+      hasSavedOnce: project.hasSavedOnce ?? Boolean(folderLink),
+      savedFileName: project.savedFileName ?? folderLink?.fileName ?? null,
+      savedFolderPath: project.savedFolderPath ?? folderLink?.folderPath ?? null,
     };
   } catch {
     return null;
@@ -758,6 +1111,7 @@ export async function openProjectRecordFromDb(
 }
 
 export async function deleteProjectFromDb(projectId: string): Promise<void> {
+  unlinkProjectFolderFromLocalStorage(projectId);
   try {
     const db = await openProjectDb();
     await new Promise<void>((resolve, reject) => {
@@ -813,6 +1167,7 @@ export async function duplicateProjectInDb(
     updatedAt: now,
     hasSavedOnce: false,
     savedFileName: null,
+    savedFolderPath: null,
   };
 
   await saveProjectRecordToDb(clone);
@@ -834,6 +1189,7 @@ export async function renameProjectInDb(
     updatedAt: Date.now(),
   };
   await saveProjectRecordToDb(updated);
+  syncLinkedFolderLocalStorage(updated);
   return updated;
 }
 

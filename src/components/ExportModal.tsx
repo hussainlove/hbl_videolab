@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Download, Film, X } from 'lucide-react';
+import { CheckCircle2, Download, Film, Search, X } from 'lucide-react';
 import {
   AspectRatio,
   ExportResult,
@@ -50,10 +50,12 @@ export function ExportModal({
   const [progress, setProgress] = useState<RenderProgress | null>(null);
   const [result, setResult] = useState<ExportResult | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [settingSearch, setSettingSearch] = useState('');
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!isOpen) return;
+    setSettingSearch('');
     setSettings((prev) => ({ ...prev, fps: defaultFps }));
     setProgress(null);
     setErrorMsg(null);
@@ -85,6 +87,21 @@ export function ExportModal({
 
   const dims = computeExportDimensions(aspectRatio, settings.resolution);
 
+  const triggerVideoDownload = (exportResult: ExportResult) => {
+    const link = document.createElement('a');
+    link.href = exportResult.url;
+    link.download = exportResult.fileName;
+    link.rel = 'noopener';
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    window.setTimeout(() => {
+      if (link.parentNode) {
+        link.parentNode.removeChild(link);
+      }
+    }, 1000);
+  };
+
   const handleStartRender = async () => {
     setErrorMsg(null);
     if (result?.url) URL.revokeObjectURL(result.url);
@@ -107,6 +124,7 @@ export function ExportModal({
         onProgress: setProgress,
       });
       setResult(exportResult);
+      triggerVideoDownload(exportResult);
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         setProgress(null);
@@ -155,9 +173,36 @@ export function ExportModal({
         {/* Body */}
         <div className="p-4 sm:p-5 space-y-5 overflow-y-auto studio-scroll min-h-0">
           {/* Configuration Form */}
-          {!isRendering && !result && (
+          {!isRendering && !result && (() => {
+            const needle = settingSearch.trim().toLowerCase();
+            const showExportRow = (keywords: string) =>
+              !needle || keywords.toLowerCase().includes(needle);
+            return (
             <>
+              <div className="relative">
+                <Search className="w-3 h-3 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={settingSearch}
+                  onChange={(e) => setSettingSearch(e.target.value)}
+                  placeholder="Search export settings (mp4, fps, 1080p, quality)..."
+                  className="w-full pl-7 pr-6 py-1 text-[11px] text-slate-100 bg-[#0B0D11] border border-white/[0.09] rounded-md focus:outline-none focus:border-sky-400 placeholder:text-slate-500"
+                />
+                {settingSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setSettingSearch('')}
+                    className="glow-btn absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-slate-400 hover:text-white border border-transparent"
+                    title="Clear search"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+
+              {(showExportRow('container format mp4 webm') || showExportRow('frame rate fps 24 30 60')) && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {showExportRow('container format mp4 webm') && (
                 <div className="space-y-1.5">
                   <label className="block text-xs text-slate-400">Container Format</label>
                   <div className="grid grid-cols-2 gap-1 p-1 bg-[#0B0D11] rounded-lg border border-white/[0.06]">
@@ -177,7 +222,9 @@ export function ExportModal({
                     ))}
                   </div>
                 </div>
+                )}
 
+                {showExportRow('frame rate fps 24 30 60') && (
                 <div className="space-y-1.5">
                   <label className="block text-xs text-slate-400">Frame Rate</label>
                   <div className="grid grid-cols-3 gap-1 p-1 bg-[#0B0D11] rounded-lg border border-white/[0.06]">
@@ -197,8 +244,11 @@ export function ExportModal({
                     ))}
                   </div>
                 </div>
+                )}
               </div>
+              )}
 
+              {showExportRow('resolution 720p 1080p 4k') && (
               <div className="space-y-1.5">
                 <label className="block text-xs text-slate-400">Resolution</label>
                 <div className="grid grid-cols-3 gap-1 p-1 bg-[#0B0D11] rounded-lg border border-white/[0.06]">
@@ -218,7 +268,9 @@ export function ExportModal({
                   ))}
                 </div>
               </div>
+              )}
 
+              {showExportRow('encoding quality super fast balanced master hq') && (
               <div className="space-y-1.5">
                 <label className="block text-xs text-slate-400">Encoding Quality</label>
                 <div className="grid grid-cols-3 gap-1 p-1 bg-[#0B0D11] rounded-lg border border-white/[0.06]">
@@ -244,15 +296,18 @@ export function ExportModal({
                   ))}
                 </div>
               </div>
+              )}
 
               {caps && (
                 <div className="text-xs text-slate-400 pt-1">
                   {caps.webCodecsSupported &&
                   (settings.format === 'mp4' ? caps.mp4VideoCodec : caps.webmVideoCodec)
                     ? `Turbo GPU WebCodecs encoder ready · ${
-                        settings.format === 'mp4' ? 'H.264 + AAC' : 'VP8/VP9 + Opus'
+                        settings.format === 'mp4'
+                          ? `H.264 + ${caps.mp4AudioMuxerCodec === 'opus' ? 'Opus' : caps.mp4AudioMuxerCodec === 'aac' ? 'AAC' : 'Audio'}`
+                          : 'VP8/VP9 + Opus'
                       }`
-                    : 'Using browser MediaRecorder fallback encoder'}
+                    : 'Using browser MediaRecorder fallback encoder (with audio)'}
                 </div>
               )}
 
@@ -262,7 +317,8 @@ export function ExportModal({
                 </div>
               )}
             </>
-          )}
+            );
+          })()}
 
           {/* Active Rendering Progress */}
           {isRendering && progress && (
@@ -315,11 +371,16 @@ export function ExportModal({
           {/* Completed Render Output */}
           {result && (
             <div className="space-y-4">
-              <div className="flex items-center gap-2.5 text-emerald-400 text-sm font-medium">
-                <CheckCircle2 className="w-4 h-4 shrink-0" />
-                <span>
-                  Rendered in {(result.renderTimeMs / 1000).toFixed(2)}s (
-                  {result.realtimeFactor.toFixed(1)}x realtime)
+              <div className="flex items-center justify-between gap-2 text-emerald-400 text-sm font-medium">
+                <div className="flex items-center gap-2 min-w-0">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span className="truncate">
+                    Rendered in {(result.renderTimeMs / 1000).toFixed(2)}s (
+                    {result.realtimeFactor.toFixed(1)}x realtime)
+                  </span>
+                </div>
+                <span className="text-[11px] font-mono text-sky-300 bg-sky-500/15 border border-sky-400/30 px-2 py-0.5 rounded shrink-0">
+                  Auto-downloaded
                 </span>
               </div>
 

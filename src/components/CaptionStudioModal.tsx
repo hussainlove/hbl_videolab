@@ -9,6 +9,7 @@ import {
   Languages,
   Loader2,
   Plus,
+  Search,
   Sparkles,
   Trash2,
   Upload,
@@ -172,6 +173,39 @@ function ModalSlider({
   );
 }
 
+function CaptionSearchInput({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <div className="relative">
+      <Search className="w-3 h-3 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full pl-7 pr-6 py-1 text-[11px] text-slate-100 bg-[#07090F] border border-white/[0.09] rounded-md focus:outline-none focus:border-sky-400 placeholder:text-slate-500"
+      />
+      {value && (
+        <button
+          type="button"
+          onClick={() => onChange('')}
+          className="glow-btn absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-slate-400 hover:text-white border border-transparent"
+          title="Clear search"
+        >
+          <X className="w-3 h-3" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function CaptionStudioModal({
   isOpen,
   onClose,
@@ -223,9 +257,19 @@ export function CaptionStudioModal({
   const [downloadingPresetKey, setDownloadingPresetKey] = useState<string | null>(null);
   const [isDraggingStage, setIsDraggingStage] = useState(false);
   const [focusedCueId, setFocusedCueId] = useState<string | null>(null);
+  const [studioSearch, setStudioSearch] = useState('');
+  const [cueSearch, setCueSearch] = useState('');
+  const [langSearch, setLangSearch] = useState('');
+  const [presetSearch, setPresetSearch] = useState('');
+  const [fontSearch, setFontSearch] = useState('');
 
   useEffect(() => {
     if (!isOpen) return;
+    setStudioSearch('');
+    setCueSearch('');
+    setLangSearch('');
+    setPresetSearch('');
+    setFontSearch('');
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -246,14 +290,27 @@ export function CaptionStudioModal({
 
   if (!isOpen) return null;
 
+  const presetNeedle = presetSearch.trim().toLowerCase();
+  const langNeedle = langSearch.trim().toLowerCase();
+  const fontNeedle = fontSearch.trim().toLowerCase();
+  const cueNeedle = cueSearch.trim().toLowerCase();
+  const studioNeedle = studioSearch.trim().toLowerCase();
+  const showCapSection = (keywords: string) =>
+    !studioNeedle || keywords.toLowerCase().includes(studioNeedle);
+
   const installedPresetSet = new Set(downloadedEffectKeys);
   const pendingCaptionPresets = CAPTION_STYLE_PRESETS.filter(
     (p) => !p.builtIn && !installedPresetSet.has(makeCaptionPresetStorageKey(p.id))
   );
-  const filteredCaptionPresets =
-    presetCategory === 'All'
-      ? CAPTION_STYLE_PRESETS
-      : CAPTION_STYLE_PRESETS.filter((p) => p.category === presetCategory);
+  const filteredCaptionPresets = CAPTION_STYLE_PRESETS.filter((p) => {
+    if (presetCategory !== 'All' && p.category !== presetCategory) return false;
+    if (!presetNeedle) return true;
+    return (
+      p.label.toLowerCase().includes(presetNeedle) ||
+      p.category.toLowerCase().includes(presetNeedle) ||
+      p.description.toLowerCase().includes(presetNeedle)
+    );
+  });
 
   const handleDownloadPresetFile = (presetConfig: TextConfig, fileSlug: string) => {
     const payload = JSON.stringify(
@@ -545,20 +602,39 @@ export function CaptionStudioModal({
             </div>
           </div>
 
+          <CaptionSearchInput
+            value={studioSearch}
+            onChange={setStudioSearch}
+            placeholder="Search caption settings (language, whisper, rewrite, preset, font, color, export)..."
+          />
+
           {/* Generated Captions Rewrite List directly below the modal preview */}
-          {captionClips.length > 0 && (
+          {captionClips.length > 0 && showCapSection('generated captions click rewrite cues edit') && (
             <div className="p-3 rounded-xl bg-[#090C13] border border-sky-400/25 space-y-2">
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <span className="text-xs font-semibold text-sky-200 flex items-center gap-1.5">
                   <Captions className="w-3.5 h-3.5 text-sky-400" />
                   <span>Generated Captions ({captionClips.length}) — Click &amp; Rewrite</span>
                 </span>
-                <span className="text-[10px] text-slate-400">
-                  Changes sync live to timeline &amp; video preview
-                </span>
+                <div className="w-full sm:w-52">
+                  <CaptionSearchInput
+                    value={cueSearch}
+                    onChange={setCueSearch}
+                    placeholder="Search caption cues..."
+                  />
+                </div>
               </div>
               <div className="max-h-40 overflow-y-auto studio-scroll pr-1 space-y-1.5">
-                {captionClips.map((clip, idx) => {
+                {captionClips
+                  .filter((clip) => {
+                    if (!cueNeedle) return true;
+                    const textVal = (clip.textConfig?.text ?? clip.name).toLowerCase();
+                    return (
+                      textVal.includes(cueNeedle) ||
+                      formatShortTime(clip.startTime).toLowerCase().includes(cueNeedle)
+                    );
+                  })
+                  .map((clip, idx) => {
                   const isCurrent =
                     currentTime >= clip.startTime && currentTime < clip.startTime + clip.duration;
                   const isFocused = focusedCueId === clip.id;
@@ -620,6 +696,7 @@ export function CaptionStudioModal({
             {/* LEFT COLUMN: Speech Detection, Script Generator, Cue Creation & Files */}
             <div className="space-y-4">
               {/* Auto Speech Recognition */}
+              {showCapSection('all language speech auto detect whisper ai offline sync translate') && (
               <div className="p-3.5 rounded-xl bg-[#090C13] border border-sky-400/20 space-y-3">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-sky-200 flex items-center gap-1.5">
@@ -631,6 +708,12 @@ export function CaptionStudioModal({
                   </span>
                 </div>
 
+                <CaptionSearchInput
+                  value={langSearch}
+                  onChange={setLangSearch}
+                  placeholder="Search languages (Urdu, English, Arabic, Hindi)..."
+                />
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <div className="space-y-1">
                     <label className="block text-[11px] text-slate-400">Output Language</label>
@@ -639,7 +722,16 @@ export function CaptionStudioModal({
                       onChange={(e) => setCaptionTargetLang(e.target.value)}
                       className="w-full px-2.5 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg focus:outline-none focus:border-sky-400"
                     >
-                      {SUPPORTED_CAPTION_LANGUAGES.map((lang) => (
+                      {SUPPORTED_CAPTION_LANGUAGES.filter((lang) => {
+                        const val = lang.code === 'auto' ? 'auto' : lang.name;
+                        if (val === captionTargetLang || lang.code === 'auto') return true;
+                        if (!langNeedle) return true;
+                        return (
+                          lang.name.toLowerCase().includes(langNeedle) ||
+                          lang.nativeName.toLowerCase().includes(langNeedle) ||
+                          lang.code.toLowerCase().includes(langNeedle)
+                        );
+                      }).map((lang) => (
                         <option key={lang.code} value={lang.code === 'auto' ? 'auto' : lang.name}>
                           {lang.code === 'auto'
                             ? lang.name
@@ -772,8 +864,10 @@ export function CaptionStudioModal({
                   </div>
                 )}
               </div>
+              )}
 
               {/* Script to Timed Captions */}
+              {showCapSection('script timed captions paste dialogue translate format') && (
               <div className="p-3.5 rounded-xl bg-[#090C13] border border-white/[0.08] space-y-2.5">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-slate-200">
@@ -857,8 +951,10 @@ export function CaptionStudioModal({
                   </button>
                 </div>
               </div>
+              )}
 
               {/* Quick Single Cue + Import/Export SRT/VTT */}
+              {showCapSection('manual caption cue subtitles file import export srt vtt ass txt clear') && (
               <div className="p-3.5 rounded-xl bg-[#090C13] border border-white/[0.08] space-y-2.5">
                 <div className="text-xs font-semibold text-slate-200">
                   Manual Caption Cue &amp; Subtitles File
@@ -1005,11 +1101,13 @@ export function CaptionStudioModal({
                   </button>
                 </div>
               </div>
+              )}
             </div>
 
             {/* RIGHT COLUMN: All Advanced Styling, Presets, Typography, Colors & Layout */}
             <div className="space-y-4">
               {/* Line Format & Active Speech Mode */}
+              {showCapSection('line layout format single line two multi word active speech effect color changer box pop underline progressive') && (
               <div className="p-3.5 rounded-xl bg-[#090C13] border border-sky-400/20 space-y-3">
                 <div className="space-y-1.5">
                   <div className="text-xs font-semibold text-slate-200">
@@ -1078,8 +1176,10 @@ export function CaptionStudioModal({
                   </div>
                 </div>
               </div>
+              )}
 
               {/* All-Over Caption Style Presets + Download */}
+              {showCapSection('all over caption presets style template import download') && (
               <div className="p-3.5 rounded-xl bg-[#090C13] border border-white/[0.08] space-y-2.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -1154,7 +1254,12 @@ export function CaptionStudioModal({
                   </button>
                 )}
 
-                {/* Preset Categories */}
+                {/* Preset Search + Categories */}
+                <CaptionSearchInput
+                  value={presetSearch}
+                  onChange={setPresetSearch}
+                  placeholder="Search caption style presets..."
+                />
                 <div className="flex flex-wrap gap-1">
                   {(['All', 'Active Speech', 'Social', 'Boxed', 'Standard', 'Cinema'] as const).map(
                     (cat) => (
@@ -1279,8 +1384,10 @@ export function CaptionStudioModal({
                   })}
                 </div>
               </div>
+              )}
 
               {/* Typography & Direction */}
+              {showCapSection('typography alignment font family weight direction rtl ltr font size rescale placement cue motion position x y margin outline') && (
               <div className="p-3.5 rounded-xl bg-[#090C13] border border-white/[0.08] space-y-3">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-slate-200">
@@ -1295,6 +1402,12 @@ export function CaptionStudioModal({
                   </button>
                 </div>
 
+                <CaptionSearchInput
+                  value={fontSearch}
+                  onChange={setFontSearch}
+                  placeholder="Search fonts..."
+                />
+
                 <div className="grid grid-cols-2 gap-2.5">
                   <div className="space-y-1">
                     <label className="block text-[11px] text-slate-400">Font Family</label>
@@ -1305,12 +1418,24 @@ export function CaptionStudioModal({
                       }
                       className="w-full px-2.5 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg"
                     >
-                      {customFonts.map((f) => (
-                        <option key={f.id} value={f.family}>
-                          {f.family}
-                        </option>
-                      ))}
-                      {BUILTIN_FONT_FAMILIES.map((f) => (
+                      {customFonts
+                        .filter(
+                          (f) =>
+                            f.family === defaultCaptionConfig.fontFamily ||
+                            !fontNeedle ||
+                            f.family.toLowerCase().includes(fontNeedle)
+                        )
+                        .map((f) => (
+                          <option key={f.id} value={f.family}>
+                            {f.family}
+                          </option>
+                        ))}
+                      {BUILTIN_FONT_FAMILIES.filter(
+                        (f) =>
+                          f === defaultCaptionConfig.fontFamily ||
+                          !fontNeedle ||
+                          f.toLowerCase().includes(fontNeedle)
+                      ).map((f) => (
                         <option key={f} value={f}>
                           {f}
                         </option>
@@ -1495,8 +1620,10 @@ export function CaptionStudioModal({
                   />
                 </div>
               </div>
+              )}
 
               {/* Colors, Word Highlight & Scrim Backdrop */}
+              {showCapSection('colors highlight backdrop active speech box all caps outline scrim opacity') && (
               <div className="p-3.5 rounded-xl bg-[#090C13] border border-white/[0.08] space-y-3">
                 <div className="text-xs font-semibold text-slate-200">
                   Colors, Highlight &amp; Backdrop
@@ -1645,6 +1772,7 @@ export function CaptionStudioModal({
                   </div>
                 )}
               </div>
+              )}
             </div>
           </div>
         </div>

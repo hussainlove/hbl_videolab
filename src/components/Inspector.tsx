@@ -3,6 +3,7 @@ import {
   AlignCenter,
   AlignLeft,
   AlignRight,
+  ArrowLeftRight,
   Captions,
   ChevronLeft,
   ChevronRight,
@@ -23,6 +24,7 @@ import {
   ANIMATION_PRESETS,
   ASPECT_RATIO_DIMENSIONS,
   AspectRatio,
+  buildPanZoomClipPatch,
   BUILTIN_FONT_FAMILIES,
   CAPTION_STYLE_PRESETS,
   CaptionActiveMode,
@@ -92,6 +94,16 @@ interface InspectorProps {
   onDuplicateSelected: () => void;
   onDeleteSelected: () => void;
   onClearSelection: () => void;
+  adjacentPrevClip?: TimelineClip | null;
+  adjacentNextClip?: TimelineClip | null;
+  onApplySeamTransition?: (
+    prevClipId: string,
+    nextClipId: string,
+    transitionType: TransitionType,
+    duration: number
+  ) => void;
+  onApplyTransitionToAll?: (transitionType: TransitionType, duration: number) => void;
+  onSetBatchDuration?: (durationSeconds: number, rippleSequence?: boolean) => void;
   width?: number;
 }
 
@@ -251,18 +263,30 @@ export function Inspector({
   onDuplicateSelected,
   onDeleteSelected,
   onClearSelection,
+  adjacentPrevClip = null,
+  adjacentNextClip = null,
+  onApplySeamTransition,
+  onApplyTransitionToAll,
+  onSetBatchDuration,
   width = 292,
 }: InspectorProps) {
   const fontInputRef = useRef<HTMLInputElement>(null);
 
   // Section-specific search filters inside Inspector boxes
+  const [seqSearch, setSeqSearch] = useState('');
+  const [batchSearch, setBatchSearch] = useState('');
+  const [clipSettingSearch, setClipSettingSearch] = useState('');
   const [fontSearch, setFontSearch] = useState('');
+  const [captionPresetSearch, setCaptionPresetSearch] = useState('');
   const [fxSearch, setFxSearch] = useState('');
   const [frameSearch, setFrameSearch] = useState('');
   const [maskSearch, setMaskSearch] = useState('');
   const [animSearch, setAnimSearch] = useState('');
   const [transSearch, setTransSearch] = useState('');
+  const [colorSearch, setColorSearch] = useState('');
   const [kfEasing, setKfEasing] = useState<KeyframeEasing>('ease-in-out');
+  const [batchDurationInput, setBatchDurationInput] = useState('4');
+  const [batchRippleSequence, setBatchRippleSequence] = useState(true);
 
   const availableTransitions = TRANSITIONS_CATALOG.filter(
     (t) => t.builtIn || downloadedTransitionIds.includes(t.id)
@@ -281,12 +305,19 @@ export function Inspector({
     (a) => a.builtIn || installedEffectSet.has(makeAnimationStorageKey(a.id))
   );
 
+  const singleClip = selectedClips.length === 1 ? selectedClips[0] : null;
+
   const fontNeedle = fontSearch.trim().toLowerCase();
+  const activeFontFamily = singleClip?.textConfig?.fontFamily;
   const filteredBuiltinFonts = fontNeedle
-    ? BUILTIN_FONT_FAMILIES.filter((f) => f.toLowerCase().includes(fontNeedle))
+    ? BUILTIN_FONT_FAMILIES.filter(
+        (f) => f === activeFontFamily || f.toLowerCase().includes(fontNeedle)
+      )
     : BUILTIN_FONT_FAMILIES;
   const filteredCustomFonts = fontNeedle
-    ? customFonts.filter((f) => f.family.toLowerCase().includes(fontNeedle))
+    ? customFonts.filter(
+        (f) => f.family === activeFontFamily || f.family.toLowerCase().includes(fontNeedle)
+      )
     : customFonts;
 
   const fxNeedle = fxSearch.trim().toLowerCase();
@@ -294,6 +325,7 @@ export function Inspector({
     ? availableEffects.filter(
         (e) =>
           e.id === 'none' ||
+          e.id === singleClip?.fxPreset ||
           e.label.toLowerCase().includes(fxNeedle) ||
           e.category.toLowerCase().includes(fxNeedle)
       )
@@ -302,24 +334,36 @@ export function Inspector({
   const frameNeedle = frameSearch.trim().toLowerCase();
   const filteredAvailableFrames = frameNeedle
     ? availableFrames.filter(
-        (f) => f.id === 'none' || f.label.toLowerCase().includes(frameNeedle)
+        (f) =>
+          f.id === 'none' ||
+          f.id === singleClip?.framePreset ||
+          f.label.toLowerCase().includes(frameNeedle)
       )
     : availableFrames;
 
   const maskNeedle = maskSearch.trim().toLowerCase();
   const filteredAvailableMasks = maskNeedle
     ? availableMasks.filter(
-        (m) => m.id === 'none' || m.label.toLowerCase().includes(maskNeedle)
+        (m) =>
+          m.id === 'none' ||
+          m.id === singleClip?.maskShape ||
+          m.label.toLowerCase().includes(maskNeedle)
       )
     : availableMasks;
   const filteredCustomMasks = maskNeedle
-    ? customMasks.filter((m) => m.name.toLowerCase().includes(maskNeedle))
+    ? customMasks.filter(
+        (m) =>
+          m.id === singleClip?.customMaskId || m.name.toLowerCase().includes(maskNeedle)
+      )
     : customMasks;
 
   const animNeedle = animSearch.trim().toLowerCase();
   const filteredAvailableAnimations = animNeedle
     ? availableAnimations.filter(
         (a) =>
+          a.id === singleClip?.animationIn ||
+          a.id === singleClip?.animationOut ||
+          a.id === singleClip?.animationCombo ||
           a.label.toLowerCase().includes(animNeedle) ||
           a.category.toLowerCase().includes(animNeedle)
       )
@@ -332,10 +376,32 @@ export function Inspector({
   const filteredAvailableTransitions = transNeedle
     ? availableTransitions.filter(
         (t) =>
+          t.id === singleClip?.transitionIn ||
+          t.id === singleClip?.transitionOut ||
           t.label.toLowerCase().includes(transNeedle) ||
           t.category.toLowerCase().includes(transNeedle)
       )
     : availableTransitions;
+
+  const captionPresetNeedle = captionPresetSearch.trim().toLowerCase();
+  const filteredCaptionPresets = captionPresetNeedle
+    ? CAPTION_STYLE_PRESETS.filter(
+        (p) =>
+          p.label.toLowerCase().includes(captionPresetNeedle) ||
+          p.category.toLowerCase().includes(captionPresetNeedle)
+      )
+    : CAPTION_STYLE_PRESETS;
+
+  const colorNeedle = colorSearch.trim().toLowerCase();
+  const filteredFilterPresetKeys = (Object.keys(FILTER_PRESET_VALUES) as FilterPreset[]).filter(
+    (presetKey) => {
+      if (!colorNeedle) return true;
+      return (
+        FILTER_PRESET_VALUES[presetKey].label.toLowerCase().includes(colorNeedle) ||
+        presetKey.toLowerCase().includes(colorNeedle)
+      );
+    }
+  );
 
   // Batch Multi-Selection Inspector
   if (selectedClips.length > 1) {
@@ -373,7 +439,21 @@ export function Inspector({
           </button>
         </div>
 
+        <div className="px-3 @[260px]:px-4 py-2.5 border-b border-white/[0.08]">
+          <InspectorSearchInput
+            value={batchSearch}
+            onChange={setBatchSearch}
+            placeholder="Search batch settings..."
+          />
+        </div>
+
         <div className="p-3 @[260px]:p-4 space-y-5">
+          {(() => {
+            const batchNeedle = batchSearch.trim().toLowerCase();
+            const showBatch = (keywords: string) =>
+              !batchNeedle || keywords.toLowerCase().includes(batchNeedle);
+            return (
+              <>
           <div className="grid grid-cols-1 @[220px]:grid-cols-2 gap-2">
             <button
               type="button"
@@ -393,31 +473,94 @@ export function Inspector({
             </button>
           </div>
 
+          {showBatch('batch adjustments duration scale opacity fade in fade out timing picture photo same') && (
           <div className="pt-4 border-t border-white/[0.08] space-y-3.5">
             <div className="text-xs font-medium text-slate-300">Batch Adjustments</div>
-            {selectedClips.every(
-              (c) =>
-                isTitleTrack(c.track) ||
-                c.assetId.includes('img') ||
-                c.assetId.includes('motion')
-            ) && (
-              <SliderRow
-                label="Duration"
-                value={Number(
-                  (
+            <div className="p-2.5 rounded-lg bg-[#07090F]/80 border border-sky-400/25 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-medium text-sky-200">
+                  Same Duration (All {selectedClips.length})
+                </span>
+                <span className="text-[10px] font-mono text-slate-400">
+                  avg{' '}
+                  {(
                     selectedClips.reduce((acc, c) => acc + c.duration, 0) / selectedClips.length
-                  ).toFixed(2)
-                )}
-                min={0.2}
-                max={60}
-                step={0.1}
-                allowDirectInput
-                inputMin={0.1}
-                inputMax={3600}
-                unit="s"
-                onChange={(val) => onBatchUpdateSelected({ duration: val })}
-              />
-            )}
+                  ).toFixed(2)}
+                  s
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="number"
+                  min={0.1}
+                  max={3600}
+                  step={0.1}
+                  value={batchDurationInput}
+                  onChange={(e) => setBatchDurationInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const val = parseFloat(batchDurationInput);
+                      if (Number.isFinite(val) && val >= 0.1) {
+                        const clamped = Number(clamp(val, 0.1, 3600).toFixed(2));
+                        if (onSetBatchDuration) {
+                          onSetBatchDuration(clamped, batchRippleSequence);
+                        } else {
+                          onBatchUpdateSelected({ duration: clamped });
+                        }
+                      }
+                    }
+                  }}
+                  placeholder="e.g. 2.0"
+                  className="w-20 px-2 py-1 text-xs font-mono text-slate-100 bg-[#111622] border border-white/[0.14] rounded-md focus:outline-none focus:border-sky-400"
+                />
+                <span className="text-[11px] font-mono text-slate-400">sec</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const val = parseFloat(batchDurationInput);
+                    if (!Number.isFinite(val) || val < 0.1) return;
+                    const clamped = Number(clamp(val, 0.1, 3600).toFixed(2));
+                    setBatchDurationInput(String(clamped));
+                    if (onSetBatchDuration) {
+                      onSetBatchDuration(clamped, batchRippleSequence);
+                    } else {
+                      onBatchUpdateSelected({ duration: clamped });
+                    }
+                  }}
+                  className="glow-btn-prism flex-1 py-1 px-2.5 text-[11px] font-semibold text-white rounded-md whitespace-nowrap"
+                >
+                  Apply All
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center gap-1">
+                {[0.5, 1, 2, 3, 5].map((presetSec) => (
+                  <button
+                    key={presetSec}
+                    type="button"
+                    onClick={() => {
+                      setBatchDurationInput(String(presetSec));
+                      if (onSetBatchDuration) {
+                        onSetBatchDuration(presetSec, batchRippleSequence);
+                      } else {
+                        onBatchUpdateSelected({ duration: presetSec });
+                      }
+                    }}
+                    className="glow-btn px-2 py-0.5 text-[10px] font-mono rounded bg-white/[0.04] hover:bg-sky-500/20 text-slate-300 hover:text-sky-200 border border-white/[0.08]"
+                  >
+                    {presetSec}s
+                  </button>
+                ))}
+              </div>
+              <label className="flex items-center gap-1.5 text-[10.5px] text-slate-400 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={batchRippleSequence}
+                  onChange={(e) => setBatchRippleSequence(e.target.checked)}
+                  className="rounded border-white/20 bg-[#111622] text-sky-400 focus:ring-0"
+                />
+                <span>Keep sequence gapless (auto-pack clips)</span>
+              </label>
+            </div>
             <SliderRow
               label="Scale"
               value={Math.round(
@@ -460,8 +603,9 @@ export function Inspector({
               />
             </div>
           </div>
+          )}
 
-          {hasRenderable && (
+          {hasRenderable && showBatch('batch glow visual effect fx animation pan loop in out') && (
             <div className="pt-4 border-t border-white/[0.08] space-y-3.5">
               <div className="text-xs font-medium text-slate-300">Batch Glow & Visual FX</div>
 
@@ -551,6 +695,11 @@ export function Inspector({
 
               <div className="space-y-1.5 pt-1">
                 <label className="block text-xs text-slate-400">Batch Clip Animation</label>
+                <InspectorSearchInput
+                  value={animSearch}
+                  onChange={setAnimSearch}
+                  placeholder="Search animations (pan, bounce, loop)..."
+                />
                 <select
                   value=""
                   onChange={(e) => {
@@ -583,7 +732,7 @@ export function Inspector({
                 >
                   <option value="">Choose animation for all...</option>
                   <option value="none">Clear All Animations</option>
-                  {availableAnimations.map((a) => (
+                  {filteredAvailableAnimations.map((a) => (
                     <option key={a.id} value={a.id}>
                       [{a.category}] {a.label}
                     </option>
@@ -593,7 +742,7 @@ export function Inspector({
             </div>
           )}
 
-          {hasVisual && (
+          {hasVisual && showBatch('batch frame overlay transition in color grade filter preset') && (
             <div className="pt-4 border-t border-white/[0.08] space-y-3">
               <div className="text-xs font-medium text-slate-300">Batch Frame Overlay</div>
               <InspectorSearchInput
@@ -652,8 +801,13 @@ export function Inspector({
               </select>
 
               <div className="text-xs font-medium text-slate-300 pt-1">Batch Color Grade</div>
+              <InspectorSearchInput
+                value={colorSearch}
+                onChange={setColorSearch}
+                placeholder="Search color presets..."
+              />
               <div className="grid grid-cols-2 @[250px]:grid-cols-3 gap-1.5">
-                {(Object.keys(FILTER_PRESET_VALUES) as FilterPreset[]).map((presetKey) => (
+                {filteredFilterPresetKeys.map((presetKey) => (
                   <button
                     key={presetKey}
                     type="button"
@@ -677,6 +831,7 @@ export function Inspector({
             </div>
           )}
 
+          {showBatch('selected clips list') && (
           <div className="pt-4 border-t border-white/[0.08] space-y-1.5">
             <div className="text-xs font-medium text-slate-300 mb-2">Selected Clips</div>
             <div className="space-y-1 max-h-48 overflow-y-auto studio-scroll pr-1">
@@ -691,6 +846,10 @@ export function Inspector({
               ))}
             </div>
           </div>
+          )}
+              </>
+            );
+          })()}
         </div>
       </aside>
     );
@@ -705,114 +864,114 @@ export function Inspector({
         style={{ width }}
         className="@container shrink-0 min-w-0 studio-panel border-l border-white/[0.08] flex flex-col h-full overflow-y-auto overflow-x-hidden studio-scroll"
       >
-        <div className="px-3 @[260px]:px-4 py-3.5 border-b border-white/[0.08]">
+        <div className="px-3 @[260px]:px-4 py-3.5 border-b border-white/[0.08] space-y-2.5">
           <h2 className="text-xs font-semibold text-slate-200 tracking-wide">
             Sequence Settings
           </h2>
+          <InspectorSearchInput
+            value={seqSearch}
+            onChange={setSeqSearch}
+            placeholder="Search sequence settings & shortcuts..."
+          />
         </div>
 
         <div className="p-3 @[260px]:p-4 space-y-5">
-          <div className="space-y-1.5">
-            <label className="block text-xs text-slate-400">Project Title</label>
-            <input
-              type="text"
-              value={projectName}
-              onChange={(e) => onChangeProjectName(e.target.value)}
-              placeholder="Untitled Sequence"
-              className="w-full px-3 py-2 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg focus:outline-none focus:border-sky-400"
-            />
-          </div>
+          {(() => {
+            const seqNeedle = seqSearch.trim().toLowerCase();
+            const showSeq = (keywords: string) =>
+              !seqNeedle || keywords.toLowerCase().includes(seqNeedle);
+            const shortcuts = [
+              { label: 'Play / Pause', keys: 'Space / K' },
+              { label: 'Copy / Cut / Paste', keys: 'Ctrl+C / X / V' },
+              { label: 'Duplicate Clip', keys: 'Ctrl+D' },
+              { label: 'Delete Selected', keys: 'Delete / Backspace' },
+              { label: 'Split Clip at Playhead', keys: 'S / Ctrl+B' },
+              { label: 'Undo / Redo', keys: 'Ctrl+Z / Ctrl+Y' },
+              { label: 'Select All Timeline', keys: 'Ctrl+A' },
+              { label: 'Multi-Select Clips', keys: 'Ctrl/Shift+Click' },
+              { label: 'Step Frame / Jump 1s', keys: 'Left/Right · J/L' },
+              { label: 'Start / End · Mute', keys: 'Home/End · M' },
+              { label: 'Timeline Zoom', keys: '+ / -' },
+              { label: 'Save / Export', keys: 'Ctrl+S / Ctrl+E' },
+            ].filter(
+              (s) =>
+                !seqNeedle ||
+                s.label.toLowerCase().includes(seqNeedle) ||
+                s.keys.toLowerCase().includes(seqNeedle) ||
+                'keyboard shortcuts'.includes(seqNeedle)
+            );
+            return (
+              <>
+                {showSeq('project title name') && (
+                  <div className="space-y-1.5">
+                    <label className="block text-xs text-slate-400">Project Title</label>
+                    <input
+                      type="text"
+                      value={projectName}
+                      onChange={(e) => onChangeProjectName(e.target.value)}
+                      placeholder="Untitled Sequence"
+                      className="w-full px-3 py-2 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg focus:outline-none focus:border-sky-400"
+                    />
+                  </div>
+                )}
 
-          <div className="space-y-1.5">
-            <label className="block text-xs text-slate-400">Timeline Frame Rate</label>
-            <div className="grid grid-cols-3 gap-1 p-1 bg-[#07090F] rounded-lg border border-white/[0.06]">
-              {([24, 30, 60] as const).map((rate) => (
-                <button
-                  key={rate}
-                  type="button"
-                  onClick={() => onChangeFps(rate)}
-                  className={`glow-btn py-1.5 text-xs font-mono rounded-md border border-transparent ${
-                    fps === rate
-                      ? 'bg-[#1A2130] text-white'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  {rate} fps
-                </button>
-              ))}
-            </div>
-          </div>
+                {showSeq('timeline frame rate fps 24 30 60') && (
+                  <div className="space-y-1.5">
+                    <label className="block text-xs text-slate-400">Timeline Frame Rate</label>
+                    <div className="grid grid-cols-3 gap-1 p-1 bg-[#07090F] rounded-lg border border-white/[0.06]">
+                      {([24, 30, 60] as const).map((rate) => (
+                        <button
+                          key={rate}
+                          type="button"
+                          onClick={() => onChangeFps(rate)}
+                          className={`glow-btn py-1.5 text-xs font-mono rounded-md border border-transparent ${
+                            fps === rate
+                              ? 'bg-[#1A2130] text-white'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          {rate} fps
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
-          <div className="pt-3 border-t border-white/[0.08] space-y-2.5 text-xs">
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">Canvas Output</span>
-              <span className="font-mono text-slate-200">
-                {dims.width} × {dims.height}
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">Total Duration</span>
-              <span className="font-mono text-slate-200">{formatShortTime(totalDuration)}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">Active Clips</span>
-              <span className="font-mono text-slate-200">{clipCount}</span>
-            </div>
-          </div>
+                {showSeq('canvas output total duration active clips resolution') && (
+                  <div className="pt-3 border-t border-white/[0.08] space-y-2.5 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">Canvas Output</span>
+                      <span className="font-mono text-slate-200">
+                        {dims.width} × {dims.height}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">Total Duration</span>
+                      <span className="font-mono text-slate-200">{formatShortTime(totalDuration)}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">Active Clips</span>
+                      <span className="font-mono text-slate-200">{clipCount}</span>
+                    </div>
+                  </div>
+                )}
 
-          <div className="pt-4 border-t border-white/[0.08] space-y-2">
-            <div className="text-xs font-medium text-slate-300">Keyboard Shortcuts</div>
-            <div className="space-y-1.5 text-[11px] text-slate-400">
-              <div className="flex justify-between">
-                <span>Play / Pause</span>
-                <span className="font-mono text-slate-300">Space / K</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Copy / Cut / Paste</span>
-                <span className="font-mono text-slate-300">Ctrl+C / X / V</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Duplicate Clip</span>
-                <span className="font-mono text-slate-300">Ctrl+D</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Delete Selected</span>
-                <span className="font-mono text-slate-300">Delete / Backspace</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Split Clip at Playhead</span>
-                <span className="font-mono text-slate-300">S / Ctrl+B</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Undo / Redo</span>
-                <span className="font-mono text-slate-300">Ctrl+Z / Ctrl+Y</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Select All Timeline</span>
-                <span className="font-mono text-slate-300">Ctrl+A</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Multi-Select Clips</span>
-                <span className="font-mono text-slate-300">Ctrl/Shift+Click</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Step Frame / Jump 1s</span>
-                <span className="font-mono text-slate-300">Left/Right · J/L</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Start / End · Mute</span>
-                <span className="font-mono text-slate-300">Home/End · M</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Timeline Zoom</span>
-                <span className="font-mono text-slate-300">+ / -</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Save / Export</span>
-                <span className="font-mono text-slate-300">Ctrl+S / Ctrl+E</span>
-              </div>
-            </div>
-          </div>
+                {shortcuts.length > 0 && (
+                  <div className="pt-4 border-t border-white/[0.08] space-y-2">
+                    <div className="text-xs font-medium text-slate-300">Keyboard Shortcuts</div>
+                    <div className="space-y-1.5 text-[11px] text-slate-400">
+                      {shortcuts.map((item) => (
+                        <div key={item.label} className="flex justify-between">
+                          <span>{item.label}</span>
+                          <span className="font-mono text-slate-300">{item.keys}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </div>
       </aside>
     );
@@ -896,9 +1055,23 @@ export function Inspector({
         )}
       </div>
 
+      <div className="px-3 @[260px]:px-4 py-2.5 border-b border-white/[0.08]">
+        <InspectorSearchInput
+          value={clipSettingSearch}
+          onChange={setClipSettingSearch}
+          placeholder="Search settings (pan, caption, color, glow, speed)..."
+        />
+      </div>
+
       <div className="p-3 @[260px]:p-4 space-y-5">
-        {/* Quick Start & Duration Bar (direct manual entry for image, text, sticker & clips) */}
         {(() => {
+          const sectionNeedle = clipSettingSearch.trim().toLowerCase();
+          const showSection = (keywords: string) =>
+            !sectionNeedle || keywords.toLowerCase().includes(sectionNeedle);
+          return (
+            <>
+        {/* Quick Start & Duration Bar (direct manual entry for image, text, sticker & clips) */}
+        {showSection('clip timing manual start duration') && (() => {
           const isBoundedMedia =
             selectedAsset?.type === 'video' || selectedAsset?.type === 'audio';
           const maxEditableDur = isBoundedMedia
@@ -952,7 +1125,7 @@ export function Inspector({
         })()}
 
         {/* Text Content & Typography Editor */}
-        {isTitle && selectedClip.textConfig && (
+        {isTitle && selectedClip.textConfig && showSection('title copy text typeface font size scale rotation alignment color entrance motion backdrop scrim caption subtitle') && (
           <div className="space-y-4">
             <div className="space-y-1.5">
               <div className="flex items-center justify-between gap-2">
@@ -1240,8 +1413,13 @@ export function Inspector({
                 />
               </label>
 
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 <span className="block text-xs text-slate-400">Caption Style Preset</span>
+                <InspectorSearchInput
+                  value={captionPresetSearch}
+                  onChange={setCaptionPresetSearch}
+                  placeholder="Search caption styles..."
+                />
                 <select
                   value={selectedClip.textConfig.captionStyle ?? 'classic-sub'}
                   onChange={(e) => {
@@ -1253,7 +1431,11 @@ export function Inspector({
                   }}
                   className="w-full px-3 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg focus:outline-none focus:border-sky-400"
                 >
-                  {CAPTION_STYLE_PRESETS.map((p) => (
+                  {CAPTION_STYLE_PRESETS.filter(
+                    (p) =>
+                      p.id === (selectedClip.textConfig?.captionStyle ?? 'classic-sub') ||
+                      filteredCaptionPresets.some((fp) => fp.id === p.id)
+                  ).map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.label} ({p.category})
                     </option>
@@ -1602,7 +1784,7 @@ export function Inspector({
         )}
 
         {/* Sticker Settings */}
-        {isSticker && selectedClip.stickerConfig && (
+        {isSticker && selectedClip.stickerConfig && showSection('sticker settings label emoji size scale rotation opacity color badge') && (
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs font-medium text-fuchsia-200 flex items-center gap-1.5">
@@ -1768,7 +1950,7 @@ export function Inspector({
         )}
 
         {/* Glowing Color Effects & Visual FX (Visual, Title & Sticker Clips) */}
-        {isRenderable && (
+        {isRenderable && showSection('glow visual effects fx blur mosaic glitch neon') && (
           <div className={`space-y-3.5 ${isTitle || isSticker ? 'pt-4 border-t border-white/[0.08]' : ''}`}>
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-slate-200 flex items-center gap-1.5">
@@ -1890,7 +2072,7 @@ export function Inspector({
         )}
 
         {/* Frame Overlay (Visual Clips) */}
-        {isVisual && (
+        {isVisual && showSection('frame overlay border electro neon cinema thickness') && (
           <div className="pt-4 border-t border-white/[0.08] space-y-3.5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-slate-200">Frame Overlay</span>
@@ -1958,7 +2140,7 @@ export function Inspector({
         )}
 
         {/* Mask & Custom Mask (Visual Clips) */}
-        {isVisual && (() => {
+        {isVisual && showSection('video mask custom shape feather invert circle rectangle') && (() => {
           const activeMaskShape = selectedClip.maskShape ?? 'none';
           const activeCustomMask =
             activeMaskShape === 'custom' && selectedClip.customMaskId
@@ -2131,7 +2313,7 @@ export function Inspector({
         })()}
 
         {/* Keyframe Animation (Visual, Title & Sticker Clips) */}
-        {isRenderable && (() => {
+        {isRenderable && showSection('keyframe animation interpolation smooth linear position scale rotation opacity') && (() => {
           const sortedKeyframes = [...(selectedClip.keyframes ?? [])].sort(
             (a, b) => a.time - b.time
           );
@@ -2277,6 +2459,7 @@ export function Inspector({
         })()}
 
         {/* Timing & Fades (All clips) */}
+        {showSection('timing fades duration playback speed fade in fade out') && (
         <div className="pt-4 border-t border-white/[0.08] space-y-3.5">
           <div className="text-xs font-medium text-slate-300">Timing & Fades</div>
           {(() => {
@@ -2340,9 +2523,10 @@ export function Inspector({
             />
           </div>
         </div>
+        )}
 
         {/* Clip Animations (In, Out & Combo Loop for Visual, Title & Sticker Clips) */}
-        {isRenderable && (() => {
+        {isRenderable && showSection('animations in out combo loop motion pan drift zoom bounce pulse shake spin') && (() => {
           const activeAnimIn = selectedClip.animationIn ?? 'none';
           const activeAnimOut = selectedClip.animationOut ?? 'none';
           const activeAnimCombo = selectedClip.animationCombo ?? 'none';
@@ -2457,11 +2641,19 @@ export function Inspector({
                 <label className="block text-xs text-slate-400">Combo / Loop Motion</label>
                 <select
                   value={activeAnimCombo}
-                  onChange={(e) =>
-                    onUpdateClip(selectedClip.id, {
-                      animationCombo: e.target.value as ClipAnimationPreset,
-                    })
-                  }
+                  onChange={(e) => {
+                    const val = e.target.value as ClipAnimationPreset;
+                    if (val === 'pan-zoom' && isVisual) {
+                      onUpdateClip(selectedClip.id, {
+                        ...buildPanZoomClipPatch(selectedClip),
+                        animationCombo: 'pan-zoom',
+                      });
+                    } else {
+                      onUpdateClip(selectedClip.id, {
+                        animationCombo: val,
+                      });
+                    }
+                  }}
                   className="w-full px-3 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg focus:outline-none focus:border-sky-400"
                 >
                   <option value="none">None</option>
@@ -2490,14 +2682,121 @@ export function Inspector({
         })()}
 
         {/* Clip Transitions (Visual, Title & Sticker Clips) */}
-        {isRenderable && (
+        {isRenderable && showSection('transitions cut dissolve wipe zoom slide adjacent seam between clips') && (
           <div className="pt-4 border-t border-white/[0.08] space-y-3.5">
-            <div className="text-xs font-medium text-slate-300">Transitions</div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-slate-300">Transitions</span>
+              {(adjacentPrevClip || adjacentNextClip) && (
+                <span className="text-[10px] text-sky-300/80 font-mono">Seam Ready</span>
+              )}
+            </div>
             <InspectorSearchInput
               value={transSearch}
               onChange={setTransSearch}
               placeholder="Search transitions..."
             />
+
+            {onApplySeamTransition && (adjacentPrevClip || adjacentNextClip) && (
+              <div className="p-2.5 rounded-lg bg-[#090C13] border border-sky-400/20 space-y-2.5">
+                <div className="text-[11px] font-medium text-sky-200 flex items-center gap-1.5">
+                  <ArrowLeftRight className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Between Adjacent Clips</span>
+                </div>
+                {adjacentPrevClip && (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-[10px] text-slate-400">
+                      <span className="truncate">Prev: {adjacentPrevClip.name} ↔ This</span>
+                      <span className="font-mono text-sky-300 shrink-0 ml-1">
+                        {selectedClip.transitionIn && selectedClip.transitionIn !== 'none'
+                          ? selectedClip.transitionIn
+                          : 'Cut'}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-4 gap-1">
+                      {(['dissolve', 'slide-left', 'zoom-in', 'none'] as TransitionType[]).map((tId) => {
+                        const active = (selectedClip.transitionIn ?? 'none') === tId;
+                        const label =
+                          tId === 'dissolve'
+                            ? 'Dissolve'
+                            : tId === 'slide-left'
+                            ? 'Slide'
+                            : tId === 'zoom-in'
+                            ? 'Zoom'
+                            : 'Cut';
+                        return (
+                          <button
+                            key={tId}
+                            type="button"
+                            onClick={() =>
+                              onApplySeamTransition(
+                                adjacentPrevClip.id,
+                                selectedClip.id,
+                                tId,
+                                selectedClip.transitionInDuration ?? 0.5
+                              )
+                            }
+                            className={`glow-btn py-1 px-1.5 text-[10px] font-medium rounded border ${
+                              active
+                                ? 'bg-sky-500/20 border-sky-400 text-sky-100'
+                                : 'bg-[#07090F] border-white/[0.08] text-slate-300 hover:text-white'
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                {adjacentNextClip && (
+                  <div className="space-y-1.5 pt-1 border-t border-white/[0.06]">
+                    <div className="flex items-center justify-between text-[10px] text-slate-400">
+                      <span className="truncate">This ↔ Next: {adjacentNextClip.name}</span>
+                      <span className="font-mono text-sky-300 shrink-0 ml-1">
+                        {adjacentNextClip.transitionIn && adjacentNextClip.transitionIn !== 'none'
+                          ? adjacentNextClip.transitionIn
+                          : 'Cut'}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-4 gap-1">
+                      {(['dissolve', 'slide-left', 'zoom-in', 'none'] as TransitionType[]).map((tId) => {
+                        const active = (adjacentNextClip.transitionIn ?? 'none') === tId;
+                        const label =
+                          tId === 'dissolve'
+                            ? 'Dissolve'
+                            : tId === 'slide-left'
+                            ? 'Slide'
+                            : tId === 'zoom-in'
+                            ? 'Zoom'
+                            : 'Cut';
+                        return (
+                          <button
+                            key={tId}
+                            type="button"
+                            onClick={() =>
+                              onApplySeamTransition(
+                                selectedClip.id,
+                                adjacentNextClip.id,
+                                tId,
+                                adjacentNextClip.transitionInDuration ?? 0.5
+                              )
+                            }
+                            className={`glow-btn py-1 px-1.5 text-[10px] font-medium rounded border ${
+                              active
+                                ? 'bg-sky-500/20 border-sky-400 text-sky-100'
+                                : 'bg-[#07090F] border-white/[0.08] text-slate-300 hover:text-white'
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="space-y-1.5">
               <label className="block text-xs text-slate-400">Transition In</label>
               <select
@@ -2571,31 +2870,350 @@ export function Inspector({
                 }
               />
             )}
+
+            {onApplyTransitionToAll && (
+              <button
+                type="button"
+                onClick={() => {
+                  const chosen =
+                    selectedClip.transitionIn && selectedClip.transitionIn !== 'none'
+                      ? selectedClip.transitionIn
+                      : selectedClip.transitionOut && selectedClip.transitionOut !== 'none'
+                      ? selectedClip.transitionOut
+                      : 'dissolve';
+                  const dur =
+                    selectedClip.transitionIn && selectedClip.transitionIn !== 'none'
+                      ? selectedClip.transitionInDuration ?? 0.5
+                      : selectedClip.transitionOutDuration ?? 0.5;
+                  onApplyTransitionToAll(chosen, dur);
+                }}
+                className="glow-btn w-full py-1.5 px-2.5 text-[11px] font-medium rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-400/35 text-sky-100 flex items-center justify-center gap-1.5"
+                title="Apply this transition between all clips on timeline"
+              >
+                <ArrowLeftRight className="w-3 h-3 text-sky-300" />
+                <span>Apply Transition to All Clips</span>
+              </button>
+            )}
           </div>
         )}
 
         {/* Transform & Motion (Visual Clips) */}
-        {isVisual && (
+        {isVisual && showSection('transform motion ken burns camera pan zoom keyframes start end scale position rotation opacity') && (() => {
+          const isPanZoom = selectedClip.kenBurns === 'pan-zoom';
+          const pzStartScale = selectedClip.panZoomStartScale ?? 100;
+          const pzStartX = selectedClip.panZoomStartX ?? 0;
+          const pzStartY = selectedClip.panZoomStartY ?? 0;
+          const pzEndScale = selectedClip.panZoomEndScale ?? 120;
+          const pzEndX = selectedClip.panZoomEndX ?? 0;
+          const pzEndY = selectedClip.panZoomEndY ?? 0;
+          const pzEasing: KeyframeEasing = selectedClip.panZoomEasing ?? 'ease-in-out';
+
+          const applyPanZoomPatch = (overrides: {
+            panZoomStartScale?: number;
+            panZoomStartX?: number;
+            panZoomStartY?: number;
+            panZoomEndScale?: number;
+            panZoomEndX?: number;
+            panZoomEndY?: number;
+            panZoomEasing?: KeyframeEasing;
+          }) => {
+            onUpdateClip(
+              selectedClip.id,
+              buildPanZoomClipPatch(selectedClip, {
+                ...(overrides.panZoomStartScale !== undefined
+                  ? { startScale: overrides.panZoomStartScale }
+                  : {}),
+                ...(overrides.panZoomStartX !== undefined
+                  ? { startX: overrides.panZoomStartX }
+                  : {}),
+                ...(overrides.panZoomStartY !== undefined
+                  ? { startY: overrides.panZoomStartY }
+                  : {}),
+                ...(overrides.panZoomEndScale !== undefined
+                  ? { endScale: overrides.panZoomEndScale }
+                  : {}),
+                ...(overrides.panZoomEndX !== undefined
+                  ? { endX: overrides.panZoomEndX }
+                  : {}),
+                ...(overrides.panZoomEndY !== undefined
+                  ? { endY: overrides.panZoomEndY }
+                  : {}),
+                ...(overrides.panZoomEasing !== undefined
+                  ? { easing: overrides.panZoomEasing }
+                  : {}),
+              })
+            );
+          };
+
+          return (
           <div className="pt-4 border-t border-white/[0.08] space-y-3.5">
-            <div className="text-xs font-medium text-slate-300">Transform & Motion</div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-slate-300">Transform & Motion</span>
+              {!isPanZoom && (
+                <button
+                  type="button"
+                  onClick={() => onUpdateClip(selectedClip.id, buildPanZoomClipPatch(selectedClip))}
+                  className="glow-btn px-2 py-0.5 rounded text-[10px] font-medium bg-sky-500/15 border border-sky-400/35 text-sky-200 hover:text-white"
+                >
+                  + Pan & Zoom
+                </button>
+              )}
+            </div>
             <div className="space-y-1.5">
-              <label className="block text-xs text-slate-400">Ken Burns Camera</label>
+              <label className="block text-xs text-slate-400">Ken Burns / Pan & Zoom Preset</label>
               <select
                 value={selectedClip.kenBurns}
-                onChange={(e) =>
-                  onUpdateClip(selectedClip.id, {
-                    kenBurns: e.target.value as KenBurnsPreset,
-                  })
-                }
+                onChange={(e) => {
+                  const nextKb = e.target.value as KenBurnsPreset;
+                  if (nextKb === 'pan-zoom') {
+                    onUpdateClip(selectedClip.id, buildPanZoomClipPatch(selectedClip));
+                  } else {
+                    onUpdateClip(selectedClip.id, {
+                      kenBurns: nextKb,
+                    });
+                  }
+                }}
                 className="w-full px-3 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg focus:outline-none focus:border-sky-400"
               >
                 <option value="none">Static</option>
+                <option value="pan-zoom">Pan & Zoom (Keyframes)</option>
                 <option value="zoom-in">Slow Zoom In</option>
                 <option value="zoom-out">Slow Zoom Out</option>
                 <option value="pan-left">Pan Left</option>
                 <option value="pan-right">Pan Right</option>
               </select>
             </div>
+
+            {isPanZoom && (
+              <div className="p-2.5 rounded-lg bg-[#090C13] border border-amber-400/25 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-medium text-amber-200 flex items-center gap-1.5">
+                    <Diamond className="w-3 h-3 text-amber-400" />
+                    <span>Pan & Zoom Keyframes</span>
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        applyPanZoomPatch({
+                          panZoomStartScale: pzEndScale,
+                          panZoomStartX: pzEndX,
+                          panZoomStartY: pzEndY,
+                          panZoomEndScale: pzStartScale,
+                          panZoomEndX: pzStartX,
+                          panZoomEndY: pzStartY,
+                        })
+                      }
+                      className="glow-btn px-1.5 py-0.5 rounded text-[10px] text-slate-300 hover:text-white bg-[#07090F] border border-white/[0.1]"
+                      title="Swap start and end keyframes"
+                    >
+                      Swap
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onUpdateClip(selectedClip.id, {
+                          kenBurns: 'none',
+                          keyframes: (selectedClip.keyframes ?? []).filter(
+                            (k) => k.id !== 'kf_panzoom_start' && k.id !== 'kf_panzoom_end'
+                          ),
+                        })
+                      }
+                      className="glow-btn px-1.5 py-0.5 rounded text-[10px] text-rose-300 hover:text-white bg-rose-500/10 border border-rose-400/20"
+                      title="Clear Pan & Zoom preset"
+                    >
+                      Off
+                    </button>
+                  </div>
+                </div>
+
+                {/* Quick Motion Presets */}
+                <div className="grid grid-cols-3 gap-1">
+                  {[
+                    { label: 'Zoom In', s1: 100, x1: 0, y1: 0, s2: 125, x2: 0, y2: 0 },
+                    { label: 'Zoom Out', s1: 125, x1: 0, y1: 0, s2: 100, x2: 0, y2: 0 },
+                    { label: 'Pan L→R', s1: 118, x1: -10, y1: 0, s2: 118, x2: 10, y2: 0 },
+                    { label: 'Pan R→L', s1: 118, x1: 10, y1: 0, s2: 118, x2: -10, y2: 0 },
+                    { label: 'Tilt Up', s1: 118, x1: 0, y1: 8, s2: 118, x2: 0, y2: -8 },
+                    { label: 'Reset', s1: 100, x1: 0, y1: 0, s2: 100, x2: 0, y2: 0 },
+                  ].map((p) => (
+                    <button
+                      key={p.label}
+                      type="button"
+                      onClick={() =>
+                        applyPanZoomPatch({
+                          panZoomStartScale: p.s1,
+                          panZoomStartX: p.x1,
+                          panZoomStartY: p.y1,
+                          panZoomEndScale: p.s2,
+                          panZoomEndX: p.x2,
+                          panZoomEndY: p.y2,
+                        })
+                      }
+                      className="glow-btn px-1.5 py-1 text-[10px] font-medium rounded bg-[#07090F] border border-white/[0.08] text-slate-300 hover:text-white truncate"
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Easing */}
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-slate-400">Motion Curve</span>
+                  <div className="flex items-center gap-1 p-0.5 bg-[#07090F] rounded border border-white/[0.08]">
+                    {(['ease-in-out', 'linear'] as KeyframeEasing[]).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => applyPanZoomPatch({ panZoomEasing: mode })}
+                        className={`glow-btn px-2 py-0.5 rounded text-[10px] border border-transparent ${
+                          pzEasing === mode
+                            ? 'bg-[#1A2130] text-sky-200'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        {mode === 'ease-in-out' ? 'Smooth' : 'Linear'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Start Keyframe */}
+                <div className="p-2 rounded bg-[#07090F] border border-white/[0.07] space-y-2">
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="text-[11px] font-medium text-emerald-300 font-mono">
+                      Start (0.00s)
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => onSeek(selectedClip.startTime)}
+                        className="glow-btn px-1.5 py-0.5 rounded text-[10px] text-slate-300 hover:text-white bg-[#141822] border border-white/[0.08]"
+                      >
+                        Jump
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          applyPanZoomPatch({
+                            panZoomStartScale: clamp(selectedClip.scale, 10, 400),
+                            panZoomStartX: clamp(selectedClip.x, -100, 100),
+                            panZoomStartY: clamp(selectedClip.y, -100, 100),
+                          })
+                        }
+                        className="glow-btn px-1.5 py-0.5 rounded text-[10px] text-sky-300 hover:text-white bg-[#141822] border border-sky-400/25"
+                        title="Capture current canvas scale & position as Start keyframe"
+                      >
+                        Use Current
+                      </button>
+                    </div>
+                  </div>
+                  <SliderRow
+                    label="Start Scale"
+                    value={pzStartScale}
+                    min={25}
+                    max={400}
+                    allowDirectInput
+                    inputMin={10}
+                    inputMax={400}
+                    unit="%"
+                    onChange={(val) => applyPanZoomPatch({ panZoomStartScale: val })}
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <SliderRow
+                      label="Start X"
+                      value={pzStartX}
+                      min={-100}
+                      max={100}
+                      allowDirectInput
+                      inputMin={-100}
+                      inputMax={100}
+                      unit="%"
+                      onChange={(val) => applyPanZoomPatch({ panZoomStartX: val })}
+                    />
+                    <SliderRow
+                      label="Start Y"
+                      value={pzStartY}
+                      min={-100}
+                      max={100}
+                      allowDirectInput
+                      inputMin={-100}
+                      inputMax={100}
+                      unit="%"
+                      onChange={(val) => applyPanZoomPatch({ panZoomStartY: val })}
+                    />
+                  </div>
+                </div>
+
+                {/* End Keyframe */}
+                <div className="p-2 rounded bg-[#07090F] border border-white/[0.07] space-y-2">
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="text-[11px] font-medium text-amber-300 font-mono">
+                      End ({selectedClip.duration.toFixed(2)}s)
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => onSeek(selectedClip.startTime + selectedClip.duration)}
+                        className="glow-btn px-1.5 py-0.5 rounded text-[10px] text-slate-300 hover:text-white bg-[#141822] border border-white/[0.08]"
+                      >
+                        Jump
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          applyPanZoomPatch({
+                            panZoomEndScale: clamp(selectedClip.scale, 10, 400),
+                            panZoomEndX: clamp(selectedClip.x, -100, 100),
+                            panZoomEndY: clamp(selectedClip.y, -100, 100),
+                          })
+                        }
+                        className="glow-btn px-1.5 py-0.5 rounded text-[10px] text-sky-300 hover:text-white bg-[#141822] border border-sky-400/25"
+                        title="Capture current canvas scale & position as End keyframe"
+                      >
+                        Use Current
+                      </button>
+                    </div>
+                  </div>
+                  <SliderRow
+                    label="End Scale"
+                    value={pzEndScale}
+                    min={25}
+                    max={400}
+                    allowDirectInput
+                    inputMin={10}
+                    inputMax={400}
+                    unit="%"
+                    onChange={(val) => applyPanZoomPatch({ panZoomEndScale: val })}
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <SliderRow
+                      label="End X"
+                      value={pzEndX}
+                      min={-100}
+                      max={100}
+                      allowDirectInput
+                      inputMin={-100}
+                      inputMax={100}
+                      unit="%"
+                      onChange={(val) => applyPanZoomPatch({ panZoomEndX: val })}
+                    />
+                    <SliderRow
+                      label="End Y"
+                      value={pzEndY}
+                      min={-100}
+                      max={100}
+                      allowDirectInput
+                      inputMin={-100}
+                      inputMax={100}
+                      unit="%"
+                      onChange={(val) => applyPanZoomPatch({ panZoomEndY: val })}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
             <SliderRow
               label="Scale"
               value={selectedClip.scale}
@@ -2624,14 +3242,20 @@ export function Inspector({
               onChange={(val) => onUpdateClip(selectedClip.id, { opacity: val })}
             />
           </div>
-        )}
+          );
+        })()}
 
         {/* Color Grade (Visual Clips) */}
-        {isVisual && (
+        {isVisual && showSection('color grade filter preset brightness contrast saturation temperature warmth vignette blur') && (
           <div className="pt-4 border-t border-white/[0.08] space-y-3.5">
             <div className="text-xs font-medium text-slate-300">Color Grade</div>
+            <InspectorSearchInput
+              value={colorSearch}
+              onChange={setColorSearch}
+              placeholder="Search color presets..."
+            />
             <div className="grid grid-cols-2 @[250px]:grid-cols-3 gap-1.5">
-              {(Object.keys(FILTER_PRESET_VALUES) as FilterPreset[]).map((presetKey) => {
+              {filteredFilterPresetKeys.map((presetKey) => {
                 const active = selectedClip.filterPreset === presetKey;
                 return (
                   <button
@@ -2702,7 +3326,7 @@ export function Inspector({
         )}
 
         {/* Audio Volume (Audio clips or Video assets) */}
-        {(isAudio || selectedAsset?.type === 'video') && (
+        {(isAudio || selectedAsset?.type === 'video') && showSection('audio level mute volume sound') && (
           <div className="pt-4 border-t border-white/[0.08] space-y-3.5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-slate-300">Audio Level</span>
@@ -2726,6 +3350,9 @@ export function Inspector({
             />
           </div>
         )}
+            </>
+          );
+        })()}
       </div>
     </aside>
   );

@@ -594,11 +594,21 @@ export function HomePage({
                             {currentProject.assets.length}{' '}
                             {currentProject.assets.length === 1 ? 'asset' : 'assets'}
                           </span>
-                          {currentProject.savedFileName && (
+                          {(currentProject.savedFolderPath || currentProject.savedFileName) && (
                             <>
                               <span aria-hidden="true">·</span>
-                              <span className="text-slate-300 truncate max-w-[200px]">
-                                {currentProject.savedFileName}
+                              <span
+                                className="inline-flex items-center gap-1 text-sky-300/90 truncate max-w-[260px]"
+                                title={
+                                  currentProject.savedFolderPath && currentProject.savedFileName
+                                    ? `${currentProject.savedFolderPath}/${currentProject.savedFileName}`
+                                    : currentProject.savedFolderPath || currentProject.savedFileName || undefined
+                                }
+                              >
+                                <FolderOpen className="w-3 h-3 shrink-0" />
+                                <span className="truncate">
+                                  {currentProject.savedFolderPath || currentProject.savedFileName}
+                                </span>
                               </span>
                             </>
                           )}
@@ -827,6 +837,15 @@ export function HomePage({
                                   <span aria-hidden="true">·</span>
                                   <span>{formatRelativeTime(project.updatedAt)}</span>
                                 </div>
+                                {project.savedFolderPath && (
+                                  <div
+                                    className="flex items-center gap-1 text-[10px] font-mono text-sky-300/85 truncate"
+                                    title={`Linked folder: ${project.savedFolderPath}`}
+                                  >
+                                    <FolderOpen className="w-3 h-3 shrink-0" />
+                                    <span className="truncate">{project.savedFolderPath}</span>
+                                  </div>
+                                )}
                               </div>
 
                               <div
@@ -980,6 +999,15 @@ export function HomePage({
                                   <span>{project.clips.length} clips</span>
                                   <span aria-hidden="true">·</span>
                                   <span>{formatRelativeTime(project.updatedAt)}</span>
+                                  {project.savedFolderPath && (
+                                    <>
+                                      <span aria-hidden="true">·</span>
+                                      <span className="inline-flex items-center gap-1 text-sky-300/85 truncate max-w-[200px]">
+                                        <FolderOpen className="w-3 h-3 shrink-0" />
+                                        <span className="truncate">{project.savedFolderPath}</span>
+                                      </span>
+                                    </>
+                                  )}
                                 </div>
                               </div>
                             </div>

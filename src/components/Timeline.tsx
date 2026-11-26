@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowLeftRight,
   Captions,
+  Check,
   CheckSquare,
   Copy,
   Eye,
@@ -11,6 +13,7 @@ import {
   Music,
   Plus,
   Scissors,
+  Search,
   Smile,
   Trash2,
   Type,
@@ -39,6 +42,7 @@ import {
   TransitionType,
   VisualEffectPreset,
 } from '../types/editor';
+import { TRANSITIONS_CATALOG } from '../utils/transitionsStorage';
 import { clamp, formatShortTime, snapTime } from '../utils/time';
 
 interface TimelineProps {
@@ -68,6 +72,7 @@ interface TimelineProps {
   onOpenCaptions?: () => void;
   onDropAssetsAtTime: (assetIds: string[], time: number, targetTrackId?: TrackId) => void;
   onDropStickerAtTime?: (stickerId: string, time: number, targetTrackId?: TrackId) => void;
+  onDropSfxAtTime?: (presetId: string, time: number, targetTrackId?: TrackId) => void;
   onDropTransitionOnClip?: (clipId: string, transitionType: TransitionType) => void;
   onDropEffectOnClip?: (clipId: string, fxPreset: VisualEffectPreset) => void;
   onDropFrameOnClip?: (clipId: string, framePreset: FramePreset) => void;
@@ -84,6 +89,34 @@ interface TimelineProps {
   onRemoveEmptyTrack?: (trackId: TrackId) => void;
   onToggleTrackLock?: (trackId: TrackId) => void;
   onToggleTrackHide?: (trackId: TrackId) => void;
+  selectedTrackId?: TrackId | null;
+  onSelectTrack?: (trackId: TrackId | null) => void;
+  onDuplicateTrack?: (trackId: TrackId) => void;
+  downloadedTransitionIds?: TransitionType[];
+  onApplySeamTransition?: (
+    prevClipId: string,
+    nextClipId: string,
+    transitionType: TransitionType,
+    duration: number
+  ) => void;
+  onApplyTransitionToAll?: (transitionType: TransitionType, duration: number) => void;
+  onResizeTransition?: (
+    clipId: string,
+    edge: 'in' | 'out',
+    duration: number,
+    recordHistory?: boolean
+  ) => void;
+  onChangeClipVolume?: (
+    clipId: string,
+    volume: number,
+    recordHistory?: boolean
+  ) => void;
+  onChangeTrackVolume?: (
+    trackId: TrackId,
+    volume: number,
+    recordHistory?: boolean
+  ) => void;
+  onSetBatchDuration?: (durationSeconds: number, rippleSequence?: boolean) => void;
   height?: number;
 }
 
@@ -137,6 +170,7 @@ export function Timeline({
   onOpenCaptions,
   onDropAssetsAtTime,
   onDropStickerAtTime,
+  onDropSfxAtTime,
   onDropTransitionOnClip,
   onDropEffectOnClip,
   onDropFrameOnClip,
@@ -153,12 +187,47 @@ export function Timeline({
   onRemoveEmptyTrack,
   onToggleTrackLock,
   onToggleTrackHide,
+  selectedTrackId = null,
+  onSelectTrack,
+  onDuplicateTrack,
+  downloadedTransitionIds = [],
+  onApplySeamTransition,
+  onApplyTransitionToAll,
+  onResizeTransition,
+  onChangeClipVolume,
+  onChangeTrackVolume,
+  onSetBatchDuration,
   height = 248,
 }: TimelineProps) {
   const [activeSnapLine, setActiveSnapLine] = useState<number | null>(null);
   const [marqueeBox, setMarqueeBox] = useState<MarqueeBox | null>(null);
   const [scrollLeft, setScrollLeft] = useState(0);
   const [viewportWidth, setViewportWidth] = useState(600);
+  const [batchDurDraft, setBatchDurDraft] = useState('4');
+  const [resizingTransInfo, setResizingTransInfo] = useState<{
+    clipId: string;
+    edge: 'in' | 'out';
+    duration: number;
+  } | null>(null);
+  const [draggingClipVolume, setDraggingClipVolume] = useState<{
+    clipId: string;
+    volume: number;
+  } | null>(null);
+  const [draggingTrackVolume, setDraggingTrackVolume] = useState<{
+    trackId: TrackId;
+    volume: number;
+  } | null>(null);
+  const [seamPopover, setSeamPopover] = useState<{
+    prevClipId: string;
+    nextClipId: string;
+    prevName: string;
+    nextName: string;
+    trackId: TrackId;
+    activeType: TransitionType;
+    duration: number;
+    leftPx: number;
+  } | null>(null);
+  const [seamSearch, setSeamSearch] = useState('');
 
   const timelineRootRef = useRef<HTMLElement>(null);
   const tracksScrollRef = useRef<HTMLDivElement>(null);
@@ -168,6 +237,22 @@ export function Timeline({
   const trackRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const syncingScrollRef = useRef<'tracks' | 'labels' | null>(null);
   const anchorClipIdRef = useRef<string | null>(null);
+
+  const availableTransitions = useMemo(() => {
+    const installed = new Set(downloadedTransitionIds);
+    return TRANSITIONS_CATALOG.filter((t) => t.builtIn || installed.has(t.id));
+  }, [downloadedTransitionIds]);
+
+  const filteredSeamTransitions = useMemo(() => {
+    const q = seamSearch.trim().toLowerCase();
+    if (!q) return availableTransitions;
+    return availableTransitions.filter(
+      (t) =>
+        t.id === seamPopover?.activeType ||
+        t.label.toLowerCase().includes(q) ||
+        t.category.toLowerCase().includes(q)
+    );
+  }, [availableTransitions, seamSearch, seamPopover?.activeType]);
 
   const assetById = useMemo(() => new Map(assets.map((a) => [a.id, a])), [assets]);
   const selectedSet = useMemo(() => new Set(selectedClipIds), [selectedClipIds]);
@@ -583,6 +668,120 @@ export function Timeline({
     window.addEventListener('pointerup', onUp);
   };
 
+  const startTransitionResize = (
+    e: React.PointerEvent,
+    clip: TimelineClip,
+    edge: 'in' | 'out'
+  ) => {
+    e.stopPropagation();
+    focusTimeline();
+    if (!onResizeTransition || getTrackControl(effectiveTrackSettings, clip.track).locked) return;
+
+    const startX = e.clientX;
+    const origDur =
+      edge === 'in'
+        ? clip.transitionInDuration ?? 0.5
+        : clip.transitionOutDuration ?? 0.5;
+    const maxDur = clamp(Number((clip.duration * 0.85).toFixed(2)), 0.2, 3.0);
+
+    const computeDur = (clientX: number) => {
+      const dx = clientX - startX;
+      const deltaSeconds = (edge === 'in' ? dx : -dx) / pixelsPerSecond;
+      return Number(clamp(origDur + deltaSeconds, 0.15, maxDur).toFixed(2));
+    };
+
+    setResizingTransInfo({ clipId: clip.id, edge, duration: origDur });
+
+    const onMove = (moveEv: PointerEvent) => {
+      const nextDur = computeDur(moveEv.clientX);
+      setResizingTransInfo({ clipId: clip.id, edge, duration: nextDur });
+      onResizeTransition(clip.id, edge, nextDur, false);
+    };
+
+    const onUp = (upEv: PointerEvent) => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      const nextDur = computeDur(upEv.clientX);
+      setResizingTransInfo(null);
+      onResizeTransition(clip.id, edge, nextDur, true);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
+
+  const startClipVolumeDrag = (e: React.PointerEvent, clip: TimelineClip) => {
+    e.stopPropagation();
+    e.preventDefault();
+    focusTimeline();
+    if (!onChangeClipVolume || getTrackControl(effectiveTrackSettings, clip.track).locked) return;
+
+    const startY = e.clientY;
+    const origVol = clip.muted ? 0 : Math.round(clamp(clip.volume ?? 100, 0, 200));
+
+    const computeVol = (clientY: number) => {
+      const dy = startY - clientY;
+      return Math.round(clamp(origVol + (dy / 56) * 200, 0, 200));
+    };
+
+    setDraggingClipVolume({ clipId: clip.id, volume: origVol });
+
+    const onMove = (moveEv: PointerEvent) => {
+      const nextVol = computeVol(moveEv.clientY);
+      setDraggingClipVolume({ clipId: clip.id, volume: nextVol });
+      onChangeClipVolume(clip.id, nextVol, false);
+    };
+
+    const onUp = (upEv: PointerEvent) => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      const nextVol = computeVol(upEv.clientY);
+      setDraggingClipVolume(null);
+      onChangeClipVolume(clip.id, nextVol, true);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
+
+  const startTrackVolumeDrag = (
+    e: React.PointerEvent,
+    trackId: TrackId,
+    initialVol: number
+  ) => {
+    e.stopPropagation();
+    e.preventDefault();
+    focusTimeline();
+    if (!onChangeTrackVolume || getTrackControl(effectiveTrackSettings, trackId).locked) return;
+
+    const startY = e.clientY;
+    const origVol = Math.round(clamp(initialVol, 0, 200));
+
+    const computeVol = (clientY: number) => {
+      const dy = startY - clientY;
+      return Math.round(clamp(origVol + (dy / 56) * 200, 0, 200));
+    };
+
+    setDraggingTrackVolume({ trackId, volume: origVol });
+
+    const onMove = (moveEv: PointerEvent) => {
+      const nextVol = computeVol(moveEv.clientY);
+      setDraggingTrackVolume({ trackId, volume: nextVol });
+      onChangeTrackVolume(trackId, nextVol, false);
+    };
+
+    const onUp = (upEv: PointerEvent) => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      const nextVol = computeVol(upEv.clientY);
+      setDraggingTrackVolume(null);
+      onChangeTrackVolume(trackId, nextVol, true);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
+
   const tickStep = pixelsPerSecond >= 90 ? 1 : pixelsPerSecond >= 45 ? 2 : 5;
   const ticks: number[] = [];
   for (let s = 0; s <= timelineSpanSeconds; s += tickStep) {
@@ -632,16 +831,28 @@ export function Timeline({
               onOpenProperties({
                 kind: 'tool',
                 toolId: 'duplicate',
-                title: 'Duplicate Clips Tool',
-                description: 'Clone all currently selected timeline clips immediately after them.',
+                title: selectedTrackId ? 'Duplicate Selected Track' : 'Duplicate Clips Tool',
+                description: selectedTrackId
+                  ? 'Create a new track and duplicate all clips from the selected track onto it.'
+                  : 'Clone all currently selected timeline clips immediately after them.',
               });
             }}
-            disabled={selectedClipIds.length === 0}
-            className="glow-btn flex items-center gap-1.5 px-2 sm:px-2.5 py-1 text-xs font-medium text-slate-200 hover:text-white border border-transparent rounded-md disabled:opacity-35 disabled:pointer-events-none whitespace-nowrap"
-            title="Duplicate selected clips"
+            disabled={selectedClipIds.length === 0 && !selectedTrackId}
+            className={`glow-btn flex items-center gap-1.5 px-2 sm:px-2.5 py-1 text-xs font-medium border rounded-md disabled:opacity-35 disabled:pointer-events-none whitespace-nowrap ${
+              selectedTrackId
+                ? 'text-sky-200 hover:text-white bg-sky-500/15 border-sky-400/40'
+                : 'text-slate-200 hover:text-white border-transparent'
+            }`}
+            title={
+              selectedTrackId
+                ? `Duplicate track ${selectedTrackId} to a new track (Ctrl+D)`
+                : 'Duplicate selected clips (Ctrl+D)'
+            }
           >
             <Copy className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Duplicate</span>
+            <span className="hidden md:inline">
+              {selectedTrackId ? 'Duplicate Track' : 'Duplicate'}
+            </span>
           </button>
           <button
             type="button"
@@ -727,10 +938,68 @@ export function Timeline({
             </button>
           )}
 
-          {selectedClipIds.length > 1 && (
-            <span className="ml-1 sm:ml-2 text-xs font-mono text-sky-300 whitespace-nowrap">
-              {selectedClipIds.length} selected
+          {selectedTrackId ? (
+            <span className="ml-1 sm:ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-sky-500/15 border border-sky-400/40 text-[11px] font-mono text-sky-200 whitespace-nowrap">
+              <span>Track {selectedTrackId}</span>
+              <button
+                type="button"
+                onClick={() => onSelectTrack?.(null)}
+                className="text-sky-300/80 hover:text-white"
+                title="Clear track selection"
+              >
+                <X className="w-3 h-3" />
+              </button>
             </span>
+          ) : (
+            selectedClipIds.length > 1 && (
+              <span className="ml-1 sm:ml-2 text-xs font-mono text-sky-300 whitespace-nowrap">
+                {selectedClipIds.length} selected
+              </span>
+            )
+          )}
+
+          {selectedClipIds.length > 1 && onSetBatchDuration && (
+            <div
+              className="ml-1 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[#0B101B] border border-sky-400/35 shrink-0"
+              title="Set one manual duration for all selected clips/pictures in sequence"
+            >
+              <span className="text-[10.5px] text-slate-400 hidden md:inline">Dur</span>
+              <input
+                type="number"
+                min={0.1}
+                max={3600}
+                step={0.1}
+                value={batchDurDraft}
+                onChange={(e) => setBatchDurDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === 'Enter') {
+                    const parsed = parseFloat(batchDurDraft);
+                    if (Number.isFinite(parsed) && parsed >= 0.1) {
+                      const next = Number(clamp(parsed, 0.1, 3600).toFixed(2));
+                      setBatchDurDraft(String(next));
+                      onSetBatchDuration(next, true);
+                    }
+                  }
+                }}
+                aria-label="Batch duration in seconds"
+                className="w-12 px-1 py-0.5 text-[11px] font-mono text-right text-slate-100 bg-[#07090F] border border-white/[0.12] rounded focus:outline-none focus:border-sky-400"
+              />
+              <span className="text-[10px] font-mono text-slate-500">s</span>
+              <button
+                type="button"
+                onClick={() => {
+                  const parsed = parseFloat(batchDurDraft);
+                  if (!Number.isFinite(parsed) || parsed < 0.1) return;
+                  const next = Number(clamp(parsed, 0.1, 3600).toFixed(2));
+                  setBatchDurDraft(String(next));
+                  onSetBatchDuration(next, true);
+                }}
+                className="glow-btn-prism px-2 py-0.5 rounded text-[10.5px] font-semibold text-white whitespace-nowrap"
+              >
+                Apply All
+              </button>
+            </div>
           )}
         </div>
 
@@ -903,7 +1172,7 @@ export function Timeline({
         <div
           ref={labelsScrollRef}
           onScroll={handleLabelsScroll}
-          className="w-40 sm:w-52 shrink-0 bg-[#0B0E16] border-r border-white/[0.08] overflow-y-auto overflow-x-hidden studio-scroll-thin"
+          className="w-44 sm:w-56 shrink-0 bg-[#0B0E16] border-r border-white/[0.08] overflow-y-auto overflow-x-hidden studio-scroll-thin"
         >
           {orderedTracks.map((track) => {
             const { heightPx, badgeClass, accentClass, Icon: TrackIcon } =
@@ -919,24 +1188,58 @@ export function Timeline({
               : isHidden
               ? EyeOff
               : Eye;
-            const trackClipCount = clips.filter((c) => c.track === track.id).length;
+            const trackClipList = clips.filter((c) => c.track === track.id);
+            const trackClipCount = trackClipList.length;
             const canRemove = track.index > 1 && trackClipCount === 0 && Boolean(onRemoveEmptyTrack);
+            const isTrackSelected = selectedTrackId === track.id;
+
+            const audioCapableTrackClips = trackClipList.filter((c) => {
+              if (isAudio) return true;
+              if (track.kind !== 'V') return false;
+              const a = assetById.get(c.assetId);
+              return a?.type === 'video';
+            });
+            const showTrackVolControl =
+              Boolean(onChangeTrackVolume) &&
+              (isAudio || (track.kind === 'V' && audioCapableTrackClips.length > 0));
+            const computedTrackVol =
+              audioCapableTrackClips.length > 0
+                ? Math.round(
+                    audioCapableTrackClips.reduce(
+                      (sum, c) => sum + (c.muted ? 0 : clamp(c.volume ?? 100, 0, 200)),
+                      0
+                    ) / audioCapableTrackClips.length
+                  )
+                : 100;
+            const displayTrackVol =
+              draggingTrackVolume?.trackId === track.id
+                ? draggingTrackVolume.volume
+                : computedTrackVol;
 
             return (
               <div
                 key={track.id}
                 style={{ height: heightPx }}
-                title={`${track.label}${isLocked ? ' (Locked)' : ''}${
+                onClick={() => onSelectTrack?.(track.id)}
+                title={`${track.label} — Click to select track${isLocked ? ' (Locked)' : ''}${
                   isHidden ? (isAudio ? ' (Muted)' : ' (Hidden)') : ''
                 }`}
-                className={`relative border-b border-white/[0.06] px-2 sm:px-2.5 flex items-center justify-between gap-1 whitespace-nowrap overflow-hidden transition-opacity ${
-                  isHidden ? 'bg-white/[0.015]' : ''
+                className={`relative border-b border-white/[0.06] px-2 sm:px-2.5 flex items-center justify-between gap-1 whitespace-nowrap overflow-hidden transition-colors cursor-pointer ${
+                  isTrackSelected
+                    ? 'bg-sky-500/15 ring-1 ring-inset ring-sky-400/60'
+                    : isHidden
+                    ? 'bg-white/[0.015]'
+                    : 'hover:bg-white/[0.03]'
                 }`}
               >
                 <span
                   aria-hidden="true"
-                  className={`absolute left-0 top-1.5 bottom-1.5 w-[2.5px] rounded-r ${
-                    isHidden ? 'bg-slate-600/50' : accentClass
+                  className={`absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r ${
+                    isTrackSelected
+                      ? 'bg-sky-400 shadow-[0_0_8px_rgba(56,189,248,0.85)]'
+                      : isHidden
+                      ? 'bg-slate-600/50'
+                      : accentClass
                   }`}
                 />
                 <div
@@ -950,19 +1253,74 @@ export function Timeline({
                     <TrackIcon className="w-3.5 h-3.5" aria-hidden="true" />
                   </span>
                   <div className="min-w-0 flex items-center gap-1 text-[11px] font-medium leading-none">
-                    <span className="font-mono font-semibold text-slate-200">{track.code}</span>
+                    <span
+                      className={`font-mono font-semibold ${
+                        isTrackSelected ? 'text-sky-200' : 'text-slate-200'
+                      }`}
+                    >
+                      {track.code}
+                    </span>
                     <span className="hidden sm:inline text-slate-500">·</span>
-                    <span className="hidden sm:inline text-slate-400 truncate max-w-[54px]">
+                    <span className="hidden sm:inline text-slate-400 truncate max-w-[46px]">
                       {track.name}
                     </span>
                   </div>
                 </div>
 
-                {/* Per-track Lock, Hide & Optional Remove Controls */}
+                {/* Per-track Volume Drag, Duplicate, Lock, Hide & Optional Remove Controls */}
                 <div
                   className="flex items-center gap-1 shrink-0"
                   onPointerDown={(e) => e.stopPropagation()}
                 >
+                  {showTrackVolControl && (
+                    <div
+                      role="slider"
+                      aria-label={`${track.code} track volume`}
+                      aria-valuemin={0}
+                      aria-valuemax={200}
+                      aria-valuenow={displayTrackVol}
+                      onPointerDown={(e) => startTrackVolumeDrag(e, track.id, displayTrackVol)}
+                      onClick={(e) => e.stopPropagation()}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        if (!isLocked) onChangeTrackVolume?.(track.id, 100, true);
+                      }}
+                      title={`Drag up/down to adjust ${track.code} volume (${displayTrackVol}%). Double-click to reset 100%.`}
+                      className={`relative h-5.5 min-w-[34px] px-1 rounded-md border flex items-center justify-center overflow-hidden select-none text-[10px] font-mono tabular-nums transition-colors ${
+                        isLocked
+                          ? 'opacity-40 cursor-not-allowed border-white/[0.06] bg-white/[0.02] text-slate-500'
+                          : draggingTrackVolume?.trackId === track.id
+                          ? 'cursor-ns-resize border-emerald-400/70 bg-emerald-500/20 text-emerald-200 shadow-[0_0_8px_rgba(16,185,129,0.28)]'
+                          : 'cursor-ns-resize border-white/[0.08] bg-white/[0.03] text-slate-300 hover:border-emerald-400/50 hover:text-emerald-200'
+                      }`}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`absolute left-0 bottom-0 right-0 pointer-events-none transition-all ${
+                          isAudio ? 'bg-emerald-400/20' : 'bg-sky-400/20'
+                        }`}
+                        style={{ height: `${clamp((displayTrackVol / 200) * 100, 0, 100)}%` }}
+                      />
+                      <span className="relative z-10">{displayTrackVol}%</span>
+                    </div>
+                  )}
+                  {onDuplicateTrack && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDuplicateTrack(track.id);
+                      }}
+                      title={`Duplicate ${track.code} track to a new track`}
+                      className={`w-5.5 h-5.5 rounded-md border flex items-center justify-center transition-colors ${
+                        isTrackSelected
+                          ? 'bg-sky-500/20 text-sky-200 border-sky-400/50 hover:bg-sky-500/35'
+                          : 'bg-white/[0.03] text-slate-400 border-white/[0.06] hover:text-sky-200 hover:border-sky-400/40'
+                      }`}
+                    >
+                      <Copy className="w-3 h-3" aria-hidden="true" />
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={(e) => {
@@ -1045,7 +1403,8 @@ export function Timeline({
               if (
                 e.dataTransfer.types.includes('application/x-framecut-assets') ||
                 e.dataTransfer.types.includes('application/x-framecut-asset') ||
-                e.dataTransfer.types.includes('application/x-framecut-sticker')
+                e.dataTransfer.types.includes('application/x-framecut-sticker') ||
+                e.dataTransfer.types.includes('application/x-framecut-sfx')
               ) {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = 'copy';
@@ -1055,6 +1414,15 @@ export function Timeline({
               const rect = e.currentTarget.getBoundingClientRect();
               const dropTime = Math.max(0, (e.clientX - rect.left) / pixelsPerSecond);
               const hoveredTrack = findHoveredTrackAtClientY(e.clientY);
+
+              const sfxId = e.dataTransfer.getData('application/x-framecut-sfx');
+              if (sfxId) {
+                e.preventDefault();
+                const preferredAudioTrack =
+                  hoveredTrack?.kind === 'A' ? hoveredTrack.id : undefined;
+                onDropSfxAtTime?.(sfxId, Number(dropTime.toFixed(2)), preferredAudioTrack);
+                return;
+              }
 
               const stickerId = e.dataTransfer.getData('application/x-framecut-sticker');
               if (stickerId) {
@@ -1093,12 +1461,23 @@ export function Timeline({
             {orderedTracks.map((track) => {
               const { heightPx } = getTrackVisualMeta(track);
               const trackClips = clips.filter((c) => c.track === track.id);
+              const visibleLeftPx = Math.max(0, scrollLeft - 240);
+              const visibleRightPx = scrollLeft + viewportWidth + 240;
+              const visibleTrackClips =
+                trackClips.length <= 80
+                  ? trackClips
+                  : trackClips.filter((clip) => {
+                      const cLeft = clip.startTime * pixelsPerSecond;
+                      const cRight = (clip.startTime + clip.duration) * pixelsPerSecond;
+                      return cRight >= visibleLeftPx && cLeft <= visibleRightPx;
+                    });
               const trackState = getTrackControl(effectiveTrackSettings, track.id);
               const isTrackLocked = trackState.locked;
               const isTrackHidden = trackState.hidden;
               const isTitle = track.kind === 'T';
               const isVisual = track.kind === 'V';
               const isAudio = track.kind === 'A';
+              const isTrackSelected = selectedTrackId === track.id;
 
               return (
                 <div
@@ -1107,9 +1486,11 @@ export function Timeline({
                     trackRowRefs.current[track.id] = el;
                   }}
                   style={{ height: heightPx }}
-                  className={`shrink-0 border-b border-white/[0.06] relative transition-opacity ${
-                    isTrackHidden ? 'opacity-40 bg-rose-950/10' : ''
-                  } ${isTrackLocked ? 'bg-amber-950/[0.06]' : ''}`}
+                  className={`shrink-0 border-b border-white/[0.06] relative transition-all ${
+                    isTrackSelected ? 'bg-sky-500/[0.08] ring-1 ring-inset ring-sky-400/25' : ''
+                  } ${isTrackHidden ? 'opacity-40 bg-rose-950/10' : ''} ${
+                    isTrackLocked ? 'bg-amber-950/[0.06]' : ''
+                  }`}
                 >
                   {isTrackLocked && (
                     <div
@@ -1121,7 +1502,7 @@ export function Timeline({
                       }}
                     />
                   )}
-                  {trackClips.map((clip) => {
+                  {visibleTrackClips.map((clip) => {
                     const leftPx = clip.startTime * pixelsPerSecond;
                     const widthPx = Math.max(18, clip.duration * pixelsPerSecond);
                     const isSelected = selectedSet.has(clip.id);
@@ -1147,6 +1528,7 @@ export function Timeline({
                     return (
                       <div
                         key={clip.id}
+                        title={`${clip.name} (${clip.duration.toFixed(2)}s)`}
                         onPointerDown={(e) => startClipDrag(e, clip)}
                         onContextMenu={(e) => {
                           e.preventDefault();
@@ -1229,30 +1611,70 @@ export function Timeline({
                             : ''
                         }`}
                       >
-                        {clip.transitionIn && clip.transitionIn !== 'none' && (
-                          <div
-                            className="absolute left-0 top-0 bottom-0 bg-sky-400/25 border-r border-sky-400/60 pointer-events-none z-10"
-                            style={{
-                              width: Math.min(
-                                widthPx * 0.45,
-                                Math.max(8, (clip.transitionInDuration ?? 0.5) * pixelsPerSecond)
-                              ),
-                            }}
-                            title={`In: ${clip.transitionIn}`}
-                          />
-                        )}
-                        {clip.transitionOut && clip.transitionOut !== 'none' && (
-                          <div
-                            className="absolute right-0 top-0 bottom-0 bg-amber-400/25 border-l border-amber-400/60 pointer-events-none z-10"
-                            style={{
-                              width: Math.min(
-                                widthPx * 0.45,
-                                Math.max(8, (clip.transitionOutDuration ?? 0.5) * pixelsPerSecond)
-                              ),
-                            }}
-                            title={`Out: ${clip.transitionOut}`}
-                          />
-                        )}
+                        {clip.transitionIn && clip.transitionIn !== 'none' && (() => {
+                          const dur = clip.transitionInDuration ?? 0.5;
+                          const transWidthPx = Math.min(
+                            widthPx * 0.65,
+                            Math.max(12, dur * pixelsPerSecond)
+                          );
+                          const isResizingThis =
+                            resizingTransInfo?.clipId === clip.id &&
+                            resizingTransInfo.edge === 'in';
+                          return (
+                            <div
+                              className="absolute left-0 top-0 bottom-0 bg-sky-400/25 border-r-2 border-sky-400/80 z-20 pointer-events-none"
+                              style={{ width: transWidthPx }}
+                              title={`In: ${clip.transitionIn} (${dur.toFixed(2)}s)`}
+                            >
+                              {!isTrackLocked && onResizeTransition && (
+                                <div
+                                  onPointerDown={(e) => startTransitionResize(e, clip, 'in')}
+                                  title="Drag horizontally to adjust Transition In duration"
+                                  className="pointer-events-auto absolute -right-1.5 top-0 bottom-0 w-3 cursor-ew-resize flex items-center justify-center group/trans"
+                                >
+                                  <span className="w-1 h-4 rounded-full bg-sky-300/80 group-hover/trans:bg-white shadow" />
+                                </div>
+                              )}
+                              {isResizingThis && (
+                                <span className="absolute left-1 bottom-1 px-1 py-0.5 rounded bg-[#07090F]/90 text-[9px] font-mono text-sky-200 border border-sky-400/50">
+                                  {resizingTransInfo.duration.toFixed(2)}s
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
+                        {clip.transitionOut && clip.transitionOut !== 'none' && (() => {
+                          const dur = clip.transitionOutDuration ?? 0.5;
+                          const transWidthPx = Math.min(
+                            widthPx * 0.65,
+                            Math.max(12, dur * pixelsPerSecond)
+                          );
+                          const isResizingThis =
+                            resizingTransInfo?.clipId === clip.id &&
+                            resizingTransInfo.edge === 'out';
+                          return (
+                            <div
+                              className="absolute right-0 top-0 bottom-0 bg-amber-400/25 border-l-2 border-amber-400/80 z-20 pointer-events-none"
+                              style={{ width: transWidthPx }}
+                              title={`Out: ${clip.transitionOut} (${dur.toFixed(2)}s)`}
+                            >
+                              {!isTrackLocked && onResizeTransition && (
+                                <div
+                                  onPointerDown={(e) => startTransitionResize(e, clip, 'out')}
+                                  title="Drag horizontally to adjust Transition Out duration"
+                                  className="pointer-events-auto absolute -left-1.5 top-0 bottom-0 w-3 cursor-ew-resize flex items-center justify-center group/trans"
+                                >
+                                  <span className="w-1 h-4 rounded-full bg-amber-300/80 group-hover/trans:bg-white shadow" />
+                                </div>
+                              )}
+                              {isResizingThis && (
+                                <span className="absolute right-1 bottom-1 px-1 py-0.5 rounded bg-[#07090F]/90 text-[9px] font-mono text-amber-200 border border-amber-400/50">
+                                  {resizingTransInfo.duration.toFixed(2)}s
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
 
                         {((clip.animationIn && clip.animationIn !== 'none') ||
                           (clip.animationOut && clip.animationOut !== 'none') ||
@@ -1285,17 +1707,94 @@ export function Timeline({
                           />
                         )}
 
-                        {isAudio && asset?.waveform && (
-                          <div className="absolute inset-x-1 bottom-1 top-4 flex items-end gap-[2px] opacity-55 pointer-events-none overflow-hidden">
-                            {asset.waveform.map((peak, idx) => (
-                              <div
-                                key={idx}
-                                className="flex-1 bg-emerald-400/80 rounded-t-[1px]"
-                                style={{ height: `${Math.round(peak * 100)}%` }}
-                              />
-                            ))}
-                          </div>
-                        )}
+                        {isAudio && asset?.waveform && (() => {
+                          const effectiveVol = clip.muted
+                            ? 0
+                            : clamp(clip.volume ?? 100, 0, 200);
+                          const gainScale = effectiveVol / 100;
+                          return (
+                            <div className="absolute inset-x-1 bottom-1 top-4 flex items-end gap-[2px] opacity-60 pointer-events-none overflow-hidden">
+                              {asset.waveform.map((peak, idx) => (
+                                <div
+                                  key={idx}
+                                  className="flex-1 bg-emerald-400/80 rounded-t-[1px] transition-[height] duration-75"
+                                  style={{
+                                    height: `${Math.min(100, Math.round(peak * gainScale * 100))}%`,
+                                  }}
+                                />
+                              ))}
+                            </div>
+                          );
+                        })()}
+
+                        {(isAudio || (isVisual && asset?.type === 'video')) &&
+                          onChangeClipVolume &&
+                          (() => {
+                            const effectiveVol =
+                              draggingClipVolume?.clipId === clip.id
+                                ? draggingClipVolume.volume
+                                : clip.muted
+                                ? 0
+                                : Math.round(clamp(clip.volume ?? 100, 0, 200));
+                            const lineBottomPct = clamp(
+                              (effectiveVol / 200) * 84 + 8,
+                              8,
+                              92
+                            );
+                            const isDraggingThisVol =
+                              draggingClipVolume?.clipId === clip.id;
+                            return (
+                              <>
+                                <div
+                                  aria-hidden="true"
+                                  className={`absolute inset-x-0 bottom-0 pointer-events-none transition-all duration-75 ${
+                                    isAudio ? 'bg-emerald-400/10' : 'bg-sky-400/10'
+                                  }`}
+                                  style={{ height: `${lineBottomPct}%` }}
+                                />
+                                {!isTrackLocked && (
+                                  <div
+                                    role="slider"
+                                    aria-label={`${clip.name} volume`}
+                                    aria-valuemin={0}
+                                    aria-valuemax={200}
+                                    aria-valuenow={effectiveVol}
+                                    onPointerDown={(e) => startClipVolumeDrag(e, clip)}
+                                    onDoubleClick={(e) => {
+                                      e.stopPropagation();
+                                      onChangeClipVolume(clip.id, 100, true);
+                                    }}
+                                    title={`Drag up/down to adjust volume (${effectiveVol}%). Double-click to reset 100%.`}
+                                    style={{ bottom: `${lineBottomPct}%` }}
+                                    className="group/vol absolute left-2 right-2 h-3 translate-y-1/2 cursor-ns-resize z-20 flex items-center"
+                                  >
+                                    <div
+                                      className={`w-full h-[2px] rounded-full transition-colors ${
+                                        isDraggingThisVol
+                                          ? isAudio
+                                            ? 'bg-emerald-300 shadow-[0_0_8px_rgba(52,211,153,0.9)]'
+                                            : 'bg-sky-300 shadow-[0_0_8px_rgba(56,189,248,0.9)]'
+                                          : isAudio
+                                          ? 'bg-emerald-300/65 group-hover/vol:bg-emerald-200'
+                                          : 'bg-sky-300/55 group-hover/vol:bg-sky-200'
+                                      }`}
+                                    />
+                                    <span
+                                      className={`absolute left-1/2 -translate-x-1/2 ${
+                                        lineBottomPct > 58 ? 'translate-y-3' : '-translate-y-3.5'
+                                      } px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold border whitespace-nowrap pointer-events-none transition-opacity ${
+                                        isDraggingThisVol
+                                          ? 'opacity-100 bg-[#07090F]/95 text-emerald-200 border-emerald-400/70 shadow-md'
+                                          : 'opacity-0 group-hover/vol:opacity-100 bg-[#07090F]/90 text-slate-100 border-white/20'
+                                      }`}
+                                    >
+                                      {effectiveVol === 0 ? '0% Muted' : `${effectiveVol}%`}
+                                    </span>
+                                  </div>
+                                )}
+                              </>
+                            );
+                          })()}
 
                         <div className="relative z-10 px-2 py-1 flex items-center justify-between gap-1 text-[11px] font-medium text-slate-100 pointer-events-none">
                           <span className="truncate flex items-center gap-1.5">
@@ -1380,6 +1879,111 @@ export function Timeline({
                       </div>
                     );
                   })}
+
+                  {/* Seam Transition Junctions between adjacent clips on visual/title tracks */}
+                  {!isAudio &&
+                    onApplySeamTransition &&
+                    (() => {
+                      const sorted = [...trackClips].sort((a, b) => a.startTime - b.startTime);
+                      const seams: Array<{ prev: TimelineClip; next: TimelineClip }> = [];
+                      for (let i = 0; i < sorted.length - 1; i++) {
+                        const prev = sorted[i];
+                        const next = sorted[i + 1];
+                        if (Math.abs(prev.startTime + prev.duration - next.startTime) <= 0.14) {
+                          seams.push({ prev, next });
+                        }
+                      }
+                      return seams.map(({ prev, next }) => {
+                        const leftPx = next.startTime * pixelsPerSecond;
+                        if (
+                          trackClips.length > 80 &&
+                          (leftPx < visibleLeftPx || leftPx > visibleRightPx)
+                        ) {
+                          return null;
+                        }
+                        const activeType: TransitionType =
+                          next.transitionIn && next.transitionIn !== 'none'
+                            ? next.transitionIn
+                            : prev.transitionOut && prev.transitionOut !== 'none'
+                            ? prev.transitionOut
+                            : 'none';
+                        const activeDur =
+                          next.transitionIn && next.transitionIn !== 'none'
+                            ? next.transitionInDuration ?? 0.5
+                            : prev.transitionOutDuration ?? 0.5;
+                        const hasActive = activeType !== 'none';
+                        return (
+                          <button
+                            key={`seam_${prev.id}_${next.id}`}
+                            type="button"
+                            disabled={isTrackLocked}
+                            onPointerDown={(e) => {
+                              e.stopPropagation();
+                            }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSeamSearch('');
+                              setSeamPopover({
+                                prevClipId: prev.id,
+                                nextClipId: next.id,
+                                prevName: prev.name,
+                                nextName: next.name,
+                                trackId: track.id,
+                                activeType,
+                                duration: activeDur,
+                                leftPx,
+                              });
+                            }}
+                            onDragOver={(e) => {
+                              if (isTrackLocked) return;
+                              if (e.dataTransfer.types.includes('application/x-framecut-transition')) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                              }
+                            }}
+                            onDrop={(e) => {
+                              if (isTrackLocked) return;
+                              const trans = e.dataTransfer.getData(
+                                'application/x-framecut-transition'
+                              ) as TransitionType;
+                              if (trans) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                const preset = TRANSITIONS_CATALOG.find((t) => t.id === trans);
+                                onApplySeamTransition(
+                                  prev.id,
+                                  next.id,
+                                  trans,
+                                  preset?.defaultDuration ?? 0.5
+                                );
+                              }
+                            }}
+                            style={{ left: leftPx }}
+                            title={
+                              hasActive
+                                ? `${activeType} (${activeDur.toFixed(2)}s) — Click to edit / Apply All`
+                                : `Add transition between "${prev.name}" & "${next.name}"`
+                            }
+                            className={`absolute top-1/2 -translate-x-1/2 -translate-y-1/2 z-25 flex items-center justify-center rounded-full border shadow-md transition-transform hover:scale-110 disabled:opacity-40 ${
+                              hasActive
+                                ? 'h-5 px-1.5 bg-sky-500 text-slate-950 border-sky-200 text-[9px] font-bold gap-0.5'
+                                : 'w-5 h-5 bg-[#111624] text-slate-300 hover:text-white border-sky-400/50 hover:border-sky-300'
+                            }`}
+                          >
+                            {hasActive ? (
+                              <>
+                                <ArrowLeftRight className="w-2.5 h-2.5 shrink-0" />
+                                <span className="font-mono leading-none">
+                                  {activeDur.toFixed(1)}s
+                                </span>
+                              </>
+                            ) : (
+                              <Plus className="w-3 h-3" />
+                            )}
+                          </button>
+                        );
+                      });
+                    })()}
                 </div>
               );
             })}
@@ -1412,6 +2016,134 @@ export function Timeline({
             />
           </div>
         </div>
+
+        {/* Inline Seam Transition Popover */}
+        {seamPopover && onApplySeamTransition && (
+          <div
+            onPointerDown={(e) => e.stopPropagation()}
+            className="fixed bottom-16 right-6 z-50 w-72 rounded-xl bg-[#0F131C] border border-sky-400/35 shadow-2xl p-3 space-y-2.5"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-xs font-semibold text-slate-100 flex items-center gap-1.5">
+                  <ArrowLeftRight className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                  <span>Transition Between Clips</span>
+                </div>
+                <div className="text-[10px] text-slate-400 truncate mt-0.5">
+                  {seamPopover.prevName} ↔ {seamPopover.nextName}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSeamPopover(null)}
+                className="glow-btn p-1 rounded text-slate-400 hover:text-white border border-transparent"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="relative">
+              <Search className="w-3 h-3 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={seamSearch}
+                onChange={(e) => setSeamSearch(e.target.value)}
+                placeholder="Search transitions..."
+                className="w-full pl-7 pr-2 py-1 text-[11px] text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-md focus:outline-none focus:border-sky-400 placeholder:text-slate-500"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-1 max-h-36 overflow-y-auto studio-scroll pr-0.5">
+              {filteredSeamTransitions.map((t) => {
+                const active = seamPopover.activeType === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => {
+                      setSeamPopover((prev) =>
+                        prev ? { ...prev, activeType: t.id } : prev
+                      );
+                      onApplySeamTransition(
+                        seamPopover.prevClipId,
+                        seamPopover.nextClipId,
+                        t.id,
+                        seamPopover.duration
+                      );
+                    }}
+                    className={`glow-btn px-2 py-1.5 text-[11px] font-medium rounded border text-left truncate flex items-center justify-between gap-1 ${
+                      active
+                        ? 'bg-sky-500/20 border-sky-400 text-sky-100'
+                        : 'bg-[#07090F] border-white/[0.08] text-slate-300 hover:text-white'
+                    }`}
+                  >
+                    <span className="truncate">{t.label}</span>
+                    {active && <Check className="w-3 h-3 text-sky-300 shrink-0" />}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="space-y-1 pt-1 border-t border-white/[0.08]">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="text-slate-400">Duration</span>
+                <span className="font-mono text-slate-200">{seamPopover.duration.toFixed(2)}s</span>
+              </div>
+              <input
+                type="range"
+                min={0.15}
+                max={2.5}
+                step={0.05}
+                value={seamPopover.duration}
+                onChange={(e) => {
+                  const nextDur = parseFloat(e.target.value);
+                  setSeamPopover((prev) => (prev ? { ...prev, duration: nextDur } : prev));
+                  if (seamPopover.activeType !== 'none') {
+                    onApplySeamTransition(
+                      seamPopover.prevClipId,
+                      seamPopover.nextClipId,
+                      seamPopover.activeType,
+                      nextDur
+                    );
+                  }
+                }}
+                className="w-full studio-slider"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-1.5 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  onApplySeamTransition(
+                    seamPopover.prevClipId,
+                    seamPopover.nextClipId,
+                    'none',
+                    0.5
+                  );
+                  setSeamPopover(null);
+                }}
+                className="glow-btn py-1.5 px-2 text-[11px] font-medium rounded-lg bg-[#07090F] text-slate-300 hover:text-white border border-white/[0.1]"
+              >
+                Cut (Remove)
+              </button>
+              {onApplyTransitionToAll && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const chosen =
+                      seamPopover.activeType !== 'none' ? seamPopover.activeType : 'dissolve';
+                    onApplyTransitionToAll(chosen, seamPopover.duration);
+                    setSeamPopover(null);
+                  }}
+                  className="glow-btn py-1.5 px-2 text-[11px] font-semibold rounded-lg bg-sky-500/20 hover:bg-sky-500/35 text-sky-100 border border-sky-400/40"
+                >
+                  Apply All
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Bottom Horizontal Timeline Pan Slider Bar */}

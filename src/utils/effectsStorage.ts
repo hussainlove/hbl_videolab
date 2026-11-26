@@ -3,11 +3,12 @@ import {
   CAPTION_STYLE_PRESETS,
   FRAME_PRESETS,
   MASK_PRESETS,
+  TITLE_AND_LOWER_THIRD_TEMPLATES,
   VISUAL_EFFECT_PRESETS,
 } from '../types/editor';
 
 export interface StoredEffectRecord {
-  key: string; // e.g. 'fx:radial-blur', 'frame:film-strip', 'mask:star', 'anim:elastic-snap', or 'caption:neon-karaoke'
+  key: string; // e.g. 'fx:radial-blur', 'frame:film-strip', 'mask:star', 'anim:elastic-snap', 'caption:neon-karaoke', or 'title:headline'
   label: string;
   downloadedAt: number;
 }
@@ -37,12 +38,19 @@ export function makeCaptionPresetStorageKey(id: string): string {
   return `caption:${id}`;
 }
 
+export function makeTitleStorageKey(id: string): string {
+  return `title:${id}`;
+}
+
 export const BUILTIN_EFFECT_KEYS: string[] = [
   ...VISUAL_EFFECT_PRESETS.filter((e) => e.builtIn).map((e) => makeFxStorageKey(e.id)),
   ...FRAME_PRESETS.filter((f) => f.builtIn).map((f) => makeFrameStorageKey(f.id)),
   ...MASK_PRESETS.filter((m) => m.builtIn).map((m) => makeMaskStorageKey(m.id)),
   ...ANIMATION_PRESETS.filter((a) => a.builtIn).map((a) => makeAnimationStorageKey(a.id)),
   ...CAPTION_STYLE_PRESETS.filter((c) => c.builtIn).map((c) => makeCaptionPresetStorageKey(c.id)),
+  ...TITLE_AND_LOWER_THIRD_TEMPLATES.filter((t) => t.builtIn).map((t) =>
+    makeTitleStorageKey(t.id)
+  ),
 ];
 
 function openEffectsDb(): Promise<IDBDatabase> {

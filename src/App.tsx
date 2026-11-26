@@ -28,6 +28,7 @@ import {
   ANIMATION_PRESETS,
   AnimationCategory,
   AspectRatio,
+  buildPanZoomClipPatch,
   BUILTIN_FONT_FAMILIES,
   CAPTION_STYLE_PRESETS,
   ClipAnimationPreset,
@@ -53,6 +54,8 @@ import {
   StickerPresetInfo,
   TextConfig,
   TimelineClip,
+  TITLE_AND_LOWER_THIRD_TEMPLATES,
+  TitleTemplateItem,
   ToolContextId,
   TrackId,
   TrackKind,
@@ -69,7 +72,11 @@ import {
   extractTimelineAudioForCaptioning,
 } from './utils/audioExtract';
 import { transcribeAudioOfflineWhisper } from './utils/offlineSpeech';
-import { extractWaveformFromUrl } from './utils/audioSynth';
+import {
+  extractWaveformFromUrl,
+  FAMOUS_SFX_CATALOG,
+  synthesizeSfxTrack,
+} from './utils/audioSynth';
 import {
   CaptionCue,
   exportClipsToAss,
@@ -88,6 +95,7 @@ import {
   makeFrameStorageKey,
   makeFxStorageKey,
   makeMaskStorageKey,
+  makeTitleStorageKey,
   saveEffectKeyToDb,
   saveManyEffectKeysToDb,
 } from './utils/effectsStorage';
@@ -97,6 +105,13 @@ import {
   saveCustomFontToDb,
 } from './utils/fontStorage';
 import { getAllSavedCustomMasks, saveCustomMaskToDb } from './utils/maskStorage';
+import {
+  deleteCustomTitleTemplateFromDb,
+  loadCustomTitleTemplates,
+  loadCustomTitleTemplatesAsync,
+  saveCustomTitleTemplateToDb,
+  saveCustomTitleTemplates,
+} from './utils/titleTemplateStorage';
 import {
   getAllSavedTransitionIds,
   saveTransitionToDb,
@@ -108,20 +123,28 @@ import {
   deleteProjectFromDb,
   duplicateProjectInDb,
   ensureHandleWritePermission,
+  exportProjectJsonDownload,
+  getLastLinkedFolderPathFromLocalStorage,
+  getProjectFolderLinkFromLocalStorage,
   importProjectFileJsonToDb,
+  linkProjectFolderInLocalStorage,
   listProjectsFromDb,
   loadFileTargetFromDb,
+  normalizeFolderPath,
   openProjectRecordFromDb,
   PersistedProjectState,
   pruneUnreferencedMediaBlobs,
   renameProjectInDb,
+  SaveDirectoryHandleLike,
   SaveFileHandleLike,
   saveFileTargetToDb,
   saveMediaBlobToDb,
+  saveMediaBlobsToDb,
   saveProjectRecordToDb,
   serializeProjectFileJson,
   setCurrentProjectIdInDb,
   StoredProjectRecord,
+  syncLinkedFolderLocalStorage,
   writeProjectToHandle,
 } from './utils/projectStorage';
 import { clamp, uid } from './utils/time';
@@ -197,15 +220,23 @@ export default function App() {
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>('16:9');
   const [fps, setFps] = useState<24 | 30 | 60>(30);
   const [assets, setAssets] = useState<MediaAsset[]>([]);
+  const assetsRef = useRef<MediaAsset[]>(assets);
+  assetsRef.current = assets;
   const [clips, setClips] = useState<TimelineClip[]>([]);
   const clipsRef = useRef<TimelineClip[]>(clips);
   clipsRef.current = clips;
   const [selectedClipIds, setSelectedClipIds] = useState<string[]>([]);
   const selectedClipIdsRef = useRef<string[]>(selectedClipIds);
   selectedClipIdsRef.current = selectedClipIds;
+  const [selectedTrackId, setSelectedTrackId] = useState<TrackId | null>(null);
+  const selectedTrackIdRef = useRef<TrackId | null>(selectedTrackId);
+  selectedTrackIdRef.current = selectedTrackId;
   const copiedClipsRef = useRef<TimelineClip[]>([]);
   const [customFonts, setCustomFonts] = useState<CustomFont[]>([]);
   const [customMasks, setCustomMasks] = useState<CustomMaskItem[]>([]);
+  const [customTitleTemplates, setCustomTitleTemplates] = useState<TitleTemplateItem[]>(() =>
+    loadCustomTitleTemplates()
+  );
   const [downloadedTransitionIds, setDownloadedTransitionIds] = useState<TransitionType[]>([]);
   const [downloadedEffectKeys, setDownloadedEffectKeys] = useState<string[]>([]);
   const [isFontLibraryOpen, setIsFontLibraryOpen] = useState(false);
@@ -276,18 +307,29 @@ export default function App() {
     direction?: 'ltr' | 'rtl';
   } | null>(null);
   const [isImporting, setIsImporting] = useState(false);
+  const [defaultImageDuration, setDefaultImageDuration] = useState(4);
+  const defaultImageDurationRef = useRef(4);
+  defaultImageDurationRef.current = defaultImageDuration;
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [isSaveLocationOpen, setIsSaveLocationOpen] = useState(false);
+  const [saveModalMode, setSaveModalMode] = useState<'new-project' | 'save' | 'save-as'>('save');
   const [hasSavedOnce, setHasSavedOnce] = useState(false);
   const [savedFileName, setSavedFileName] = useState<string | null>(null);
+  const [savedFolderPath, setSavedFolderPath] = useState<string | null>(null);
+  const [lastAutoSavedAt, setLastAutoSavedAt] = useState<number | null>(null);
   const [isProjectSavedFlash, setIsProjectSavedFlash] = useState(false);
   const saveFlashTimerRef = useRef<number | null>(null);
 
   const projectFileHandleRef = useRef<SaveFileHandleLike | null>(null);
+  const projectDirHandleRef = useRef<SaveDirectoryHandleLike | null>(null);
   const hasSavedOnceRef = useRef(false);
   hasSavedOnceRef.current = hasSavedOnce;
   const savedFileNameRef = useRef<string | null>(null);
   savedFileNameRef.current = savedFileName;
+  const savedFolderPathRef = useRef<string | null>(null);
+  savedFolderPathRef.current = savedFolderPath;
+  const lastAutoSavedAtRef = useRef<number | null>(null);
+  lastAutoSavedAtRef.current = lastAutoSavedAt;
   const embeddedMediaCacheRef = useRef<Map<string, string>>(new Map());
 
   const activeViewRef = useRef(activeView);
@@ -361,6 +403,8 @@ export default function App() {
         updatedAt: Date.now(),
         hasSavedOnce: hasSavedOnceRef.current,
         savedFileName: savedFileNameRef.current,
+        savedFolderPath: savedFolderPathRef.current,
+        lastAutoSavedAt: lastAutoSavedAtRef.current,
       };
     },
     []
@@ -378,7 +422,21 @@ export default function App() {
   }, []);
 
   const syncLinkedFileNow = useCallback(async (promptPermissionIfNeeded: boolean) => {
-    const handle = projectFileHandleRef.current;
+    let handle = projectFileHandleRef.current;
+    const dirHandle = projectDirHandleRef.current;
+    if (!handle && dirHandle) {
+      try {
+        const fallbackName =
+          savedFileNameRef.current ||
+          `${(latestProjectRef.current.projectName || 'framecut-project')
+            .trim()
+            .replace(/[^a-zA-Z0-9._-]+/g, '-') || 'framecut-project'}.framecut.json`;
+        handle = await dirHandle.getFileHandle(fallbackName, { create: true });
+        projectFileHandleRef.current = handle;
+      } catch {
+        return false;
+      }
+    }
     if (!handle) return false;
     const allowed = await ensureHandleWritePermission(handle, promptPermissionIfNeeded);
     if (!allowed) return false;
@@ -395,14 +453,21 @@ export default function App() {
     let cancelled = false;
     (async () => {
       try {
-        const [savedFonts, savedTransIds, savedEffectKeys, savedMasks, workspace] =
-          await Promise.all([
-            getAllSavedFonts(),
-            getAllSavedTransitionIds(),
-            getAllSavedEffectKeys(),
-            getAllSavedCustomMasks(),
-            bootstrapProjectsFromDb(),
-          ]);
+        const [
+          savedFonts,
+          savedTransIds,
+          savedEffectKeys,
+          savedMasks,
+          savedCustomTitles,
+          workspace,
+        ] = await Promise.all([
+          getAllSavedFonts(),
+          getAllSavedTransitionIds(),
+          getAllSavedEffectKeys(),
+          getAllSavedCustomMasks(),
+          loadCustomTitleTemplatesAsync(),
+          bootstrapProjectsFromDb(),
+        ]);
         if (cancelled) return;
 
         if (savedTransIds.length > 0) {
@@ -413,6 +478,9 @@ export default function App() {
         }
         if (savedMasks.length > 0) {
           setCustomMasks(savedMasks);
+        }
+        if (savedCustomTitles.length > 0) {
+          setCustomTitleTemplates(savedCustomTitles);
         }
 
         if (savedFonts.length > 0) {
@@ -472,10 +540,13 @@ export default function App() {
       const record = buildCurrentProjectRecord(true);
       if (record) {
         void saveProjectRecordToDb(record);
+        if (hasSavedOnceRef.current || savedFolderPathRef.current) {
+          syncLinkedFolderLocalStorage(record, Boolean(projectDirHandleRef.current));
+        }
       }
     }, 80);
     const fileTimer = window.setTimeout(() => {
-      if (projectFileHandleRef.current) {
+      if (projectFileHandleRef.current || projectDirHandleRef.current) {
         void syncLinkedFileNow(false);
       }
     }, 160);
@@ -502,6 +573,36 @@ export default function App() {
     syncLinkedFileNow,
   ]);
 
+  // Dedicated 30-second periodic auto-save updating the same saved project, linked folder & localStorage
+  useEffect(() => {
+    if (activeView !== 'editor' || !activeProjectId) return;
+    const intervalId = window.setInterval(() => {
+      if (
+        activeViewRef.current !== 'editor' ||
+        !activeProjectIdRef.current ||
+        !isProjectHydratedRef.current
+      ) {
+        return;
+      }
+      const now = Date.now();
+      lastAutoSavedAtRef.current = now;
+      setLastAutoSavedAt(now);
+      const record = buildCurrentProjectRecord(true);
+      if (record) {
+        record.lastAutoSavedAt = now;
+        void saveProjectRecordToDb(record);
+        if (hasSavedOnceRef.current || savedFolderPathRef.current) {
+          syncLinkedFolderLocalStorage(record, Boolean(projectDirHandleRef.current));
+        }
+      }
+      if (projectFileHandleRef.current || projectDirHandleRef.current) {
+        void syncLinkedFileNow(false);
+      }
+      triggerSavedFlash();
+    }, 30_000);
+    return () => window.clearInterval(intervalId);
+  }, [activeView, activeProjectId, buildCurrentProjectRecord, syncLinkedFileNow, triggerSavedFlash]);
+
   // Flush latest project state immediately on pointerup & tab hide/unload (never overwrites other projects)
   useEffect(() => {
     const flushNow = () => {
@@ -515,8 +616,11 @@ export default function App() {
       const record = buildCurrentProjectRecord(true);
       if (record) {
         void saveProjectRecordToDb(record);
+        if (hasSavedOnceRef.current || savedFolderPathRef.current) {
+          syncLinkedFolderLocalStorage(record, Boolean(projectDirHandleRef.current));
+        }
       }
-      if (projectFileHandleRef.current) {
+      if (projectFileHandleRef.current || projectDirHandleRef.current) {
         void syncLinkedFileNow(false);
       }
     };
@@ -694,6 +798,31 @@ export default function App() {
     if (selectedClips.length !== 1) return null;
     return allAssets.find((a) => a.id === selectedClips[0].assetId) ?? null;
   }, [allAssets, selectedClips]);
+
+  const { adjacentPrevClip, adjacentNextClip } = useMemo(() => {
+    if (selectedClips.length !== 1) {
+      return { adjacentPrevClip: null as TimelineClip | null, adjacentNextClip: null as TimelineClip | null };
+    }
+    const sel = selectedClips[0];
+    if (isAudioTrack(sel.track)) {
+      return { adjacentPrevClip: null as TimelineClip | null, adjacentNextClip: null as TimelineClip | null };
+    }
+    const trackClips = clips
+      .filter((c) => c.track === sel.track)
+      .sort((a, b) => a.startTime - b.startTime);
+    const idx = trackClips.findIndex((c) => c.id === sel.id);
+    if (idx === -1) {
+      return { adjacentPrevClip: null as TimelineClip | null, adjacentNextClip: null as TimelineClip | null };
+    }
+    const prev = idx > 0 ? trackClips[idx - 1] : null;
+    const next = idx < trackClips.length - 1 ? trackClips[idx + 1] : null;
+    return {
+      adjacentPrevClip:
+        prev && Math.abs(prev.startTime + prev.duration - sel.startTime) <= 0.14 ? prev : null,
+      adjacentNextClip:
+        next && Math.abs(sel.startTime + sel.duration - next.startTime) <= 0.14 ? next : null,
+    };
+  }, [clips, selectedClips]);
 
   // Commit clips with undo history
   const commitClips = useCallback(
@@ -1237,6 +1366,256 @@ export default function App() {
     [selectedClipIds, commitClips]
   );
 
+  const handleApplySeamTransition = useCallback(
+    (
+      prevClipId: string,
+      nextClipId: string,
+      transitionType: TransitionType,
+      duration: number
+    ) => {
+      commitClips((prev) =>
+        prev.map((c) => {
+          if (getTrackControl(trackSettingsRef.current, c.track).locked) return c;
+          if (c.id === nextClipId) {
+            return {
+              ...c,
+              transitionIn: transitionType,
+              transitionInDuration: duration,
+            };
+          }
+          if (c.id === prevClipId) {
+            return {
+              ...c,
+              transitionOut: 'none',
+            };
+          }
+          return c;
+        })
+      );
+    },
+    [commitClips]
+  );
+
+  const handleQuickAddTransition = useCallback(
+    (type: TransitionType, defaultDuration: number) => {
+      const renderables = clipsRef.current.filter(
+        (c) => !isAudioTrack(c.track) && !getTrackControl(trackSettingsRef.current, c.track).locked
+      );
+      if (renderables.length === 0) return;
+
+      const selectedRenderableIds = new Set(
+        selectedClipIds.filter((id) => renderables.some((c) => c.id === id))
+      );
+
+      // 1. If user has renderable clip(s) selected, apply directly & cleanly
+      if (selectedRenderableIds.size > 0) {
+        const clearingPrevIds = new Set<string>();
+        for (const c of renderables) {
+          if (!selectedRenderableIds.has(c.id)) continue;
+          const prevNeighbor = renderables.find(
+            (p) =>
+              p.id !== c.id &&
+              p.track === c.track &&
+              Math.abs(p.startTime + p.duration - c.startTime) <= 0.14
+          );
+          if (prevNeighbor) clearingPrevIds.add(prevNeighbor.id);
+        }
+        commitClips((prev) =>
+          prev.map((c) => {
+            if (getTrackControl(trackSettingsRef.current, c.track).locked) return c;
+            if (selectedRenderableIds.has(c.id)) {
+              return {
+                ...c,
+                transitionIn: type,
+                transitionInDuration: c.transitionInDuration ?? defaultDuration,
+              };
+            }
+            if (clearingPrevIds.has(c.id)) {
+              return { ...c, transitionOut: 'none' };
+            }
+            return c;
+          })
+        );
+        return;
+      }
+
+      // 2. Otherwise auto-target the touching seam nearest to playhead (or clip at/nearest playhead)
+      const byTrack = new Map<string, TimelineClip[]>();
+      for (const c of renderables) {
+        const list = byTrack.get(c.track) ?? [];
+        list.push(c);
+        byTrack.set(c.track, list);
+      }
+
+      let bestSeam: { prev: TimelineClip; next: TimelineClip; dist: number } | null = null;
+      for (const trackList of byTrack.values()) {
+        const sorted = [...trackList].sort((a, b) => a.startTime - b.startTime);
+        for (let i = 0; i < sorted.length - 1; i++) {
+          const prev = sorted[i];
+          const next = sorted[i + 1];
+          if (Math.abs(prev.startTime + prev.duration - next.startTime) <= 0.14) {
+            const dist = Math.abs(next.startTime - currentTime);
+            if (!bestSeam || dist < bestSeam.dist) {
+              bestSeam = { prev, next, dist };
+            }
+          }
+        }
+      }
+
+      if (bestSeam) {
+        handleApplySeamTransition(
+          bestSeam.prev.id,
+          bestSeam.next.id,
+          type,
+          defaultDuration
+        );
+        setSelectedClipIds([bestSeam.next.id]);
+        return;
+      }
+
+      // 3. Fallback: clip currently under playhead, else first visual/renderable clip
+      const underPlayhead =
+        renderables.find(
+          (c) => currentTime >= c.startTime && currentTime <= c.startTime + c.duration
+        ) ??
+        [...renderables].sort(
+          (a, b) =>
+            (isVisualTrack(a.track) ? 0 : 1) - (isVisualTrack(b.track) ? 0 : 1) ||
+            a.startTime - b.startTime
+        )[0];
+
+      if (underPlayhead) {
+        commitClips((prev) =>
+          prev.map((c) =>
+            c.id === underPlayhead.id
+              ? {
+                  ...c,
+                  transitionIn: type,
+                  transitionInDuration: c.transitionInDuration ?? defaultDuration,
+                }
+              : c
+          )
+        );
+        setSelectedClipIds([underPlayhead.id]);
+      }
+    },
+    [selectedClipIds, currentTime, commitClips, handleApplySeamTransition]
+  );
+
+  const handleApplyTransitionToAll = useCallback(
+    (type: TransitionType, duration: number) => {
+      const renderables = clipsRef.current.filter(
+        (c) => !isAudioTrack(c.track) && !getTrackControl(trackSettingsRef.current, c.track).locked
+      );
+      if (renderables.length === 0) return;
+
+      const byTrack = new Map<string, TimelineClip[]>();
+      for (const c of renderables) {
+        const list = byTrack.get(c.track) ?? [];
+        list.push(c);
+        byTrack.set(c.track, list);
+      }
+
+      const applyInIds = new Set<string>();
+      const clearOutIds = new Set<string>();
+      for (const trackList of byTrack.values()) {
+        const sorted = [...trackList].sort((a, b) => a.startTime - b.startTime);
+        if (sorted.length === 1) {
+          applyInIds.add(sorted[0].id);
+        } else {
+          for (let i = 1; i < sorted.length; i++) {
+            applyInIds.add(sorted[i].id);
+            clearOutIds.add(sorted[i - 1].id);
+          }
+        }
+      }
+
+      commitClips((prev) =>
+        prev.map((c) => {
+          if (getTrackControl(trackSettingsRef.current, c.track).locked) return c;
+          if (!applyInIds.has(c.id) && !clearOutIds.has(c.id)) return c;
+          return {
+            ...c,
+            ...(applyInIds.has(c.id)
+              ? { transitionIn: type, transitionInDuration: duration }
+              : {}),
+            ...(clearOutIds.has(c.id) ? { transitionOut: 'none' } : {}),
+          };
+        })
+      );
+    },
+    [commitClips]
+  );
+
+  const handleResizeTransition = useCallback(
+    (
+      clipId: string,
+      edge: 'in' | 'out',
+      duration: number,
+      recordHistory = true
+    ) => {
+      commitClips(
+        (prev) =>
+          prev.map((c) => {
+            if (c.id !== clipId || getTrackControl(trackSettingsRef.current, c.track).locked) {
+              return c;
+            }
+            const clamped = clamp(
+              Number(duration.toFixed(2)),
+              0.15,
+              Math.max(0.2, Math.min(3.0, c.duration * 0.85))
+            );
+            return edge === 'in'
+              ? { ...c, transitionInDuration: clamped }
+              : { ...c, transitionOutDuration: clamped };
+          }),
+        recordHistory
+      );
+    },
+    [commitClips]
+  );
+
+  const handleChangeClipVolume = useCallback(
+    (clipId: string, volume: number, recordHistory = true) => {
+      const nextVol = Math.round(clamp(volume, 0, 200));
+      commitClips(
+        (prev) =>
+          prev.map((c) => {
+            if (c.id !== clipId || getTrackControl(trackSettingsRef.current, c.track).locked) {
+              return c;
+            }
+            return {
+              ...c,
+              volume: nextVol,
+              muted: nextVol > 0 ? false : c.muted,
+            };
+          }),
+        recordHistory
+      );
+    },
+    [commitClips]
+  );
+
+  const handleChangeTrackVolume = useCallback(
+    (trackId: TrackId, volume: number, recordHistory = true) => {
+      if (getTrackControl(trackSettingsRef.current, trackId).locked) return;
+      const nextVol = Math.round(clamp(volume, 0, 200));
+      commitClips(
+        (prev) =>
+          prev.map((c) => {
+            if (c.track !== trackId) return c;
+            return {
+              ...c,
+              volume: nextVol,
+              muted: nextVol > 0 ? false : c.muted,
+            };
+          }),
+        recordHistory
+      );
+    },
+    [commitClips]
+  );
+
   const handleDownloadEffectItem = useCallback(async (key: string, label: string) => {
     await saveEffectKeyToDb(key, label);
     setDownloadedEffectKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
@@ -1295,6 +1674,18 @@ export default function App() {
     const pending = CAPTION_STYLE_PRESETS.filter(
       (c) => !c.builtIn && !installed.has(makeCaptionPresetStorageKey(c.id))
     ).map((c) => ({ key: makeCaptionPresetStorageKey(c.id), label: c.label }));
+    if (pending.length === 0) return;
+    await saveManyEffectKeysToDb(pending);
+    setDownloadedEffectKeys((prev) =>
+      Array.from(new Set([...prev, ...pending.map((p) => p.key)]))
+    );
+  }, [downloadedEffectKeys]);
+
+  const handleDownloadAllTitleTemplates = useCallback(async () => {
+    const installed = new Set(downloadedEffectKeys);
+    const pending = TITLE_AND_LOWER_THIRD_TEMPLATES.filter(
+      (t) => !t.builtIn && !installed.has(makeTitleStorageKey(t.id))
+    ).map((t) => ({ key: makeTitleStorageKey(t.id), label: t.name }));
     if (pending.length === 0) return;
     await saveManyEffectKeysToDb(pending);
     setDownloadedEffectKeys((prev) =>
@@ -1509,6 +1900,14 @@ export default function App() {
             };
           }
           if (resolvedCategory === 'Combo') {
+            if (animationId === 'pan-zoom' && isVisualTrack(c.track)) {
+              return {
+                ...c,
+                ...buildPanZoomClipPatch(c),
+                animationCombo: 'pan-zoom',
+                animationIntensity: c.animationIntensity ?? 75,
+              };
+            }
             return {
               ...c,
               animationCombo: animationId,
@@ -1532,41 +1931,65 @@ export default function App() {
     setIsImporting(true);
     try {
       const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-      const sortedFiles = Array.from(fileList).sort((a, b) => collator.compare(a.name, b.name));
-      const newAssets: MediaAsset[] = [];
+      const sortedFiles = Array.from(fileList).sort((a, b) => {
+        const cmp = collator.compare(a.name, b.name);
+        return cmp !== 0 ? cmp : a.name.localeCompare(b.name);
+      });
 
+      const imageFiles: File[] = [];
+      const otherFiles: File[] = [];
       for (const file of sortedFiles) {
+        const kind = classifyMediaFile(file);
+        if (!kind) continue;
+        if (kind === 'image') imageFiles.push(file);
+        else otherFiles.push(file);
+      }
+
+      const pendingBlobs: Array<{ assetId: string; blob: Blob; name: string }> = [];
+      const assetByFile = new Map<File, MediaAsset>();
+      const imgDur = defaultImageDurationRef.current;
+
+      // Probe images in parallel chunks of 16 so 1000+ images import smoothly
+      const IMG_BATCH = 16;
+      for (let i = 0; i < imageFiles.length; i += IMG_BATCH) {
+        const slice = imageFiles.slice(i, i + IMG_BATCH);
+        await Promise.all(
+          slice.map(async (file) => {
+            const url = URL.createObjectURL(file);
+            const img = new Image();
+            await new Promise<void>((resolve) => {
+              const timer = window.setTimeout(resolve, 1800);
+              img.onload = () => {
+                window.clearTimeout(timer);
+                resolve();
+              };
+              img.onerror = () => {
+                window.clearTimeout(timer);
+                resolve();
+              };
+              img.src = url;
+            });
+            const assetId = uid('img');
+            pendingBlobs.push({ assetId, blob: file, name: file.name });
+            assetByFile.set(file, {
+              id: assetId,
+              name: file.name,
+              type: 'image',
+              url,
+              thumbnailUrl: url,
+              duration: imgDur,
+              width: img.naturalWidth || 1920,
+              height: img.naturalHeight || 1080,
+            });
+          })
+        );
+      }
+
+      for (const file of otherFiles) {
         const mediaKind = classifyMediaFile(file);
         if (!mediaKind) continue;
-
         const url = URL.createObjectURL(file);
-        if (mediaKind === 'image') {
-          const img = new Image();
-          await new Promise<void>((resolve) => {
-            const timer = window.setTimeout(resolve, 2500);
-            img.onload = () => {
-              window.clearTimeout(timer);
-              resolve();
-            };
-            img.onerror = () => {
-              window.clearTimeout(timer);
-              resolve();
-            };
-            img.src = url;
-          });
-          const assetId = uid('img');
-          await saveMediaBlobToDb(assetId, file, file.name);
-          newAssets.push({
-            id: assetId,
-            name: file.name,
-            type: 'image',
-            url,
-            thumbnailUrl: url,
-            duration: 4,
-            width: img.naturalWidth || 1920,
-            height: img.naturalHeight || 1080,
-          });
-        } else if (mediaKind === 'video') {
+        if (mediaKind === 'video') {
           const video = document.createElement('video');
           video.muted = true;
           video.playsInline = true;
@@ -1588,7 +2011,6 @@ export default function App() {
                 });
               }, 2500);
               video.onloadedmetadata = () => {
-                // Ensure unusual containers still resolve if seek doesn't fire
                 if (video.readyState >= 1 && !video.videoWidth && !video.duration) {
                   finish({ duration: 5, width: 1920, height: 1080 });
                 }
@@ -1623,8 +2045,8 @@ export default function App() {
             }
           );
           const assetId = uid('vid');
-          await saveMediaBlobToDb(assetId, file, file.name);
-          newAssets.push({
+          pendingBlobs.push({ assetId, blob: file, name: file.name });
+          assetByFile.set(file, {
             id: assetId,
             name: file.name,
             type: 'video',
@@ -1637,8 +2059,8 @@ export default function App() {
         } else {
           const { peaks, duration } = await extractWaveformFromUrl(url);
           const assetId = uid('aud');
-          await saveMediaBlobToDb(assetId, file, file.name);
-          newAssets.push({
+          pendingBlobs.push({ assetId, blob: file, name: file.name });
+          assetByFile.set(file, {
             id: assetId,
             name: file.name,
             type: 'audio',
@@ -1647,6 +2069,16 @@ export default function App() {
             waveform: peaks,
           });
         }
+      }
+
+      if (pendingBlobs.length > 0) {
+        await saveMediaBlobsToDb(pendingBlobs);
+      }
+
+      const newAssets: MediaAsset[] = [];
+      for (const file of sortedFiles) {
+        const createdAsset = assetByFile.get(file);
+        if (createdAsset) newAssets.push(createdAsset);
       }
 
       if (newAssets.length > 0) {
@@ -1684,6 +2116,58 @@ export default function App() {
       ensureTrackRegistered(makeTrackId(kind, maxIdx + 1));
     },
     [clips, ensureTrackRegistered]
+  );
+
+  const handleSelectTrack = useCallback((trackId: TrackId | null) => {
+    setSelectedTrackId(trackId);
+    selectedTrackIdRef.current = trackId;
+    if (trackId) {
+      const trackClipIds = clipsRef.current
+        .filter((c) => c.track === trackId)
+        .map((c) => c.id);
+      setSelectedClipIds(trackClipIds);
+    } else {
+      setSelectedClipIds([]);
+    }
+  }, []);
+
+  const handleDuplicateTrack = useCallback(
+    (sourceTrackId: TrackId) => {
+      const kind = getTrackKind(sourceTrackId);
+      let maxIdx = 1;
+      const allIds = [
+        ...clipsRef.current.map((c) => c.track),
+        ...extraTrackIdsRef.current,
+        ...Object.keys(trackSettingsRef.current),
+      ];
+      for (const id of allIds) {
+        if (getTrackKind(id) === kind) {
+          const match = id.match(/(\d+)$/);
+          const idx = match ? Number(match[1]) : 1;
+          if (idx > maxIdx) maxIdx = idx;
+        }
+      }
+      const newTrackId = makeTrackId(kind, maxIdx + 1);
+      ensureTrackRegistered(newTrackId);
+
+      const sourceClips = clipsRef.current.filter((c) => c.track === sourceTrackId);
+      const clones: TimelineClip[] = sourceClips.map((target) => ({
+        ...target,
+        id: uid('clip'),
+        track: newTrackId,
+        textConfig: target.textConfig ? { ...target.textConfig } : undefined,
+        stickerConfig: target.stickerConfig ? { ...target.stickerConfig } : undefined,
+        keyframes: target.keyframes ? target.keyframes.map((k) => ({ ...k })) : undefined,
+      }));
+
+      if (clones.length > 0) {
+        commitClips((prev) => [...prev, ...clones]);
+      }
+      setSelectedTrackId(newTrackId);
+      selectedTrackIdRef.current = newTrackId;
+      setSelectedClipIds(clones.map((c) => c.id));
+    },
+    [ensureTrackRegistered, commitClips]
   );
 
   const handleRemoveEmptyTrack = useCallback(
@@ -1781,64 +2265,101 @@ export default function App() {
     [clips, commitClips, ensureTrackRegistered]
   );
 
+  const handleChangeDefaultImageDuration = useCallback((nextSec: number) => {
+    const clean = Number(clamp(nextSec, 0.1, 3600).toFixed(2));
+    setDefaultImageDuration(clean);
+    defaultImageDurationRef.current = clean;
+    setAssets((prev) =>
+      prev.map((a) => (a.type === 'image' ? { ...a, duration: clean } : a))
+    );
+  }, []);
+
   const handleAddAssetsSerialToTimeline = useCallback(
     (assetList: MediaAsset[], explicitStartTime?: number, preferredTrackId?: TrackId) => {
       if (assetList.length === 0) return;
       const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-      const sorted = [...assetList].sort((a, b) => collator.compare(a.name, b.name));
+      const sorted = [...assetList].sort((a, b) => {
+        const cmp = collator.compare(a.name, b.name);
+        return cmp !== 0 ? cmp : a.name.localeCompare(b.name);
+      });
 
+      const currentClips = clipsRef.current;
+      const chosenTrackByKind: Partial<Record<TrackKind, TrackId>> = {};
       const kindCursors: Record<TrackKind, number> = {
         T: explicitStartTime ?? 0,
         V:
           explicitStartTime !== undefined
             ? explicitStartTime
-            : clips
+            : currentClips
                 .filter((c) => c.track === 'V1')
                 .reduce((end, c) => Math.max(end, c.startTime + c.duration), 0),
         A:
           explicitStartTime !== undefined
             ? explicitStartTime
-            : clips
+            : currentClips
                 .filter((c) => c.track === 'A1')
                 .reduce((end, c) => Math.max(end, c.startTime + c.duration), 0),
       };
 
+      const registeredTracks = new Set<TrackId>();
+      const totalKindDuration: Record<TrackKind, number> = { T: 0, V: 0, A: 0 };
+      for (const asset of sorted) {
+        const k: TrackKind = asset.type === 'audio' ? 'A' : 'V';
+        totalKindDuration[k] +=
+          asset.type === 'image' ? defaultImageDurationRef.current : asset.duration;
+      }
       const created: TimelineClip[] = [];
+
       for (const asset of sorted) {
         const kind: TrackKind = asset.type === 'audio' ? 'A' : 'V';
+        const effectiveDuration =
+          asset.type === 'image' ? defaultImageDurationRef.current : asset.duration;
         const startAt = Number(kindCursors[kind].toFixed(2));
-        const pool = [...clips, ...created];
-        let targetTrack: TrackId;
 
-        if (explicitStartTime !== undefined) {
-          targetTrack = findOrExpandTrackForSpan(
-            pool,
-            kind,
-            startAt,
-            asset.duration,
-            trackSettingsRef.current,
-            preferredTrackId,
-            extraTrackIdsRef.current
-          );
-        } else {
-          const baseId = makeTrackId(kind, 1);
-          targetTrack = !getTrackControl(trackSettingsRef.current, baseId).locked
-            ? baseId
-            : findOrExpandTrackForSpan(
-                pool,
-                kind,
-                startAt,
-                asset.duration,
-                trackSettingsRef.current,
-                preferredTrackId,
-                extraTrackIdsRef.current
-              );
+        let targetTrack = chosenTrackByKind[kind];
+        if (!targetTrack) {
+          const spanNeeded = Math.max(effectiveDuration, totalKindDuration[kind]);
+          if (explicitStartTime !== undefined) {
+            targetTrack = findOrExpandTrackForSpan(
+              currentClips,
+              kind,
+              startAt,
+              spanNeeded,
+              trackSettingsRef.current,
+              preferredTrackId,
+              extraTrackIdsRef.current
+            );
+          } else {
+            const baseId = makeTrackId(kind, 1);
+            targetTrack = !getTrackControl(trackSettingsRef.current, baseId).locked
+              ? baseId
+              : findOrExpandTrackForSpan(
+                  currentClips,
+                  kind,
+                  startAt,
+                  spanNeeded,
+                  trackSettingsRef.current,
+                  preferredTrackId,
+                  extraTrackIdsRef.current
+                );
+          }
+          chosenTrackByKind[kind] = targetTrack;
+          if (!registeredTracks.has(targetTrack)) {
+            registeredTracks.add(targetTrack);
+            ensureTrackRegistered(targetTrack);
+          }
+          // If chosen track wasn't V1/A1 when explicitStartTime is undefined, align cursor to end of that track
+          if (explicitStartTime === undefined && targetTrack !== makeTrackId(kind, 1)) {
+            kindCursors[kind] = currentClips
+              .filter((c) => c.track === targetTrack)
+              .reduce((end, c) => Math.max(end, c.startTime + c.duration), 0);
+          }
         }
 
-        ensureTrackRegistered(targetTrack);
-        const clip = createDefaultClipProps(asset, targetTrack, startAt);
+        const clipStart = Number(kindCursors[kind].toFixed(2));
+        const clip = createDefaultClipProps(asset, targetTrack, clipStart, effectiveDuration);
         created.push(clip);
-        kindCursors[kind] = startAt + clip.duration;
+        kindCursors[kind] = clipStart + clip.duration;
       }
 
       if (created.length > 0) {
@@ -1846,7 +2367,7 @@ export default function App() {
         setSelectedClipIds(created.map((c) => c.id));
       }
     },
-    [clips, commitClips, ensureTrackRegistered]
+    [commitClips, ensureTrackRegistered]
   );
 
   const handleAddTitleTemplate = useCallback(
@@ -1992,6 +2513,89 @@ export default function App() {
       handleAddSticker(preset, dropTime, targetTrackId);
     },
     [handleAddSticker]
+  );
+
+  const handleSaveCustomTitleTemplate = useCallback((tpl: TitleTemplateItem) => {
+    const normalized: TitleTemplateItem = { ...tpl, builtIn: true, isCustom: true };
+    void saveCustomTitleTemplateToDb(normalized);
+    setCustomTitleTemplates((prev) => {
+      const next = [normalized, ...prev.filter((item) => item.id !== normalized.id)];
+      saveCustomTitleTemplates(next);
+      return next;
+    });
+  }, []);
+
+  const handleDeleteCustomTitleTemplate = useCallback((id: string) => {
+    void deleteCustomTitleTemplateFromDb(id);
+    setCustomTitleTemplates((prev) => {
+      const next = prev.filter((item) => item.id !== id);
+      saveCustomTitleTemplates(next);
+      return next;
+    });
+  }, []);
+
+  const handleAddSfxToTimeline = useCallback(
+    async (presetId: string, explicitTime?: number, preferredTrackId?: TrackId) => {
+      const preset = FAMOUS_SFX_CATALOG.find((s) => s.id === presetId);
+      if (!preset) return;
+
+      const sfxAssetId = `sfx_${preset.id}`;
+      let existingAsset = assetsRef.current.find((a) => a.id === sfxAssetId);
+      let sfxDuration = existingAsset?.duration ?? preset.duration;
+
+      if (!existingAsset) {
+        const synth = synthesizeSfxTrack(preset.id);
+        sfxDuration = synth.duration;
+        const fileName = `${preset.label}.wav`;
+        try {
+          await saveMediaBlobToDb(sfxAssetId, synth.blob, fileName);
+        } catch {
+          // continue cleanly in memory even if IndexedDB quota is busy
+        }
+        const createdAsset: MediaAsset = {
+          id: sfxAssetId,
+          name: `${preset.label} (SFX)`,
+          type: 'audio',
+          url: synth.url,
+          duration: synth.duration,
+          waveform: synth.waveform,
+        };
+        existingAsset = createdAsset;
+        setAssets((prev) =>
+          prev.some((a) => a.id === sfxAssetId) ? prev : [...prev, createdAsset]
+        );
+      }
+
+      const startAt = explicitTime !== undefined ? explicitTime : Number(currentTime.toFixed(2));
+      const targetTrack = findOrExpandTrackForSpan(
+        clipsRef.current,
+        'A',
+        startAt,
+        sfxDuration,
+        trackSettingsRef.current,
+        preferredTrackId,
+        extraTrackIdsRef.current
+      );
+      ensureTrackRegistered(targetTrack);
+
+      const sfxClip: TimelineClip = {
+        ...createDefaultClipProps(existingAsset, targetTrack, startAt, sfxDuration),
+        name: preset.label,
+        fadeIn: 0.01,
+        fadeOut: 0.04,
+        volume: 100,
+      };
+      commitClips((prev) => [...prev, sfxClip]);
+      setSelectedClipIds([sfxClip.id]);
+    },
+    [currentTime, commitClips, ensureTrackRegistered]
+  );
+
+  const handleDropSfxAtTime = useCallback(
+    (presetId: string, dropTime: number, targetTrackId?: TrackId) => {
+      void handleAddSfxToTimeline(presetId, dropTime, targetTrackId);
+    },
+    [handleAddSfxToTimeline]
   );
 
   const handleUpdateStickerSize = useCallback(
@@ -2981,7 +3585,15 @@ export default function App() {
           prev.map((c) => {
             if (getTrackControl(trackSettingsRef.current, c.track).locked) return c;
             if (c.id === id) {
-              return { ...c, ...targetNormalizedPatch };
+              const merged = { ...c, ...targetNormalizedPatch };
+              if (
+                patch.duration !== undefined &&
+                patch.keyframes === undefined &&
+                merged.kenBurns === 'pan-zoom'
+              ) {
+                return { ...merged, ...buildPanZoomClipPatch(merged) };
+              }
+              return merged;
             }
             if (
               shouldSyncAllCaptions &&
@@ -3076,17 +3688,104 @@ export default function App() {
         );
       commitClips(
         (prev) =>
-          prev.map((c) =>
-            (idSet.has(c.id) ||
-              (includesCaption && isTitleTrack(c.track) && Boolean(c.textConfig?.isCaption))) &&
-            !getTrackControl(trackSettingsRef.current, c.track).locked
-              ? { ...c, ...patch }
-              : c
-          ),
+          prev.map((c) => {
+            if (
+              (idSet.has(c.id) ||
+                (includesCaption && isTitleTrack(c.track) && Boolean(c.textConfig?.isCaption))) &&
+              !getTrackControl(trackSettingsRef.current, c.track).locked
+            ) {
+              const merged = { ...c, ...patch };
+              if (
+                patch.duration !== undefined &&
+                patch.keyframes === undefined &&
+                merged.kenBurns === 'pan-zoom'
+              ) {
+                return { ...merged, ...buildPanZoomClipPatch(merged) };
+              }
+              return merged;
+            }
+            return c;
+          }),
         recordHistory
       );
     },
     [selectedClipIds, commitClips]
+  );
+
+  const handleSetBatchDuration = useCallback(
+    (durationSeconds: number, rippleSequence = true) => {
+      if (selectedClipIds.length === 0) return;
+      const targetDur = Number(clamp(durationSeconds, 0.1, 3600).toFixed(2));
+      const idSet = new Set(selectedClipIds);
+      const assetMap = new Map(allAssets.map((a) => [a.id, a]));
+
+      commitClips((prev) => {
+        // 1. Update duration for all selected unlocked clips
+        const updatedMap = new Map<string, TimelineClip>();
+        const affectedTracks = new Set<TrackId>();
+
+        for (const c of prev) {
+          if (idSet.has(c.id) && !getTrackControl(trackSettingsRef.current, c.track).locked) {
+            affectedTracks.add(c.track);
+            const asset = assetMap.get(c.assetId);
+            const isTimedMedia = asset && (asset.type === 'video' || asset.type === 'audio');
+            const maxMediaDur = isTimedMedia
+              ? Math.max(0.1, (asset.duration - c.sourceOffset) / Math.max(0.25, c.speed || 1))
+              : targetDur;
+            const nextDuration = Number(
+              clamp(Math.min(targetDur, maxMediaDur), 0.1, 3600).toFixed(2)
+            );
+            const merged: TimelineClip = { ...c, duration: nextDuration };
+            const finalClip =
+              merged.kenBurns === 'pan-zoom'
+                ? { ...merged, ...buildPanZoomClipPatch(merged) }
+                : merged;
+            updatedMap.set(c.id, finalClip);
+          } else {
+            updatedMap.set(c.id, c);
+          }
+        }
+
+        if (!rippleSequence) {
+          return prev.map((c) => updatedMap.get(c.id) ?? c);
+        }
+
+        // 2. Ripple-pack clips per affected track so sequential pictures stay strictly gapless
+        const startOverrideMap = new Map<string, number>();
+        for (const trackId of affectedTracks) {
+          const origTrackClips = prev
+            .filter((c) => c.track === trackId)
+            .sort((a, b) => a.startTime - b.startTime);
+
+          let prevOrigEnd = 0;
+          let prevNewEnd = 0;
+          for (let i = 0; i < origTrackClips.length; i++) {
+            const orig = origTrackClips[i];
+            const nextClip = updatedMap.get(orig.id) ?? orig;
+            let newStart: number;
+            if (i === 0) {
+              newStart = orig.startTime;
+            } else {
+              const origGap = Math.max(0, orig.startTime - prevOrigEnd);
+              const bothSelected = idSet.has(orig.id) && idSet.has(origTrackClips[i - 1].id);
+              newStart = Number(
+                (bothSelected ? prevNewEnd : prevNewEnd + origGap).toFixed(2)
+              );
+            }
+            startOverrideMap.set(orig.id, newStart);
+            prevOrigEnd = orig.startTime + orig.duration;
+            prevNewEnd = newStart + nextClip.duration;
+          }
+        }
+
+        return prev.map((c) => {
+          const base = updatedMap.get(c.id) ?? c;
+          const nextStart = startOverrideMap.get(c.id);
+          return nextStart !== undefined ? { ...base, startTime: nextStart } : base;
+        });
+      }, true);
+    },
+    [selectedClipIds, allAssets, commitClips]
   );
 
   const handleMoveClips = useCallback(
@@ -3199,6 +3898,10 @@ export default function App() {
   );
 
   const handleDuplicateSelected = useCallback(() => {
+    if (selectedTrackIdRef.current) {
+      handleDuplicateTrack(selectedTrackIdRef.current);
+      return;
+    }
     if (selectedClipIds.length === 0) return;
     const idSet = new Set(selectedClipIds);
     const targets = clips.filter(
@@ -3221,7 +3924,7 @@ export default function App() {
 
     commitClips((prev) => [...prev, ...clones]);
     setSelectedClipIds(clones.map((c) => c.id));
-  }, [selectedClipIds, clips, commitClips]);
+  }, [selectedClipIds, clips, commitClips, handleDuplicateTrack]);
 
   const handleDeleteSelected = useCallback(() => {
     if (selectedClipIds.length === 0) return;
@@ -3592,6 +4295,14 @@ export default function App() {
             };
           }
           if (category === 'Combo') {
+            if (animationId === 'pan-zoom' && isVisualTrack(c.track)) {
+              return {
+                ...c,
+                ...buildPanZoomClipPatch(c),
+                animationCombo: 'pan-zoom',
+                animationIntensity: intensity,
+              };
+            }
             return {
               ...c,
               animationCombo: animationId,
@@ -3718,9 +4429,11 @@ export default function App() {
     return `${clean || 'framecut-project'}.framecut.json`;
   }, [projectName]);
 
-  const promptSaveFileLocation = useCallback(async () => {
-    const picker = (
-      window as unknown as {
+  const promptSaveFileLocation = useCallback(
+    async (mode: 'new-project' | 'save' | 'save-as' = 'save') => {
+      setSaveModalMode(mode);
+      const win = window as unknown as {
+        showDirectoryPicker?: (opts?: { mode?: 'read' | 'readwrite' }) => Promise<SaveDirectoryHandleLike>;
         showSaveFilePicker?: (opts?: {
           suggestedName?: string;
           types?: Array<{
@@ -3728,77 +4441,191 @@ export default function App() {
             accept: Record<string, string[]>;
           }>;
         }) => Promise<SaveFileHandleLike>;
-      }
-    ).showSaveFilePicker;
+      };
 
-    if (typeof picker === 'function') {
-      try {
-        const handle = await picker({
-          suggestedName: defaultSaveFileName,
-          types: [
+      if (typeof win.showDirectoryPicker === 'function') {
+        try {
+          const dirHandle = await win.showDirectoryPicker({ mode: 'readwrite' });
+          const fileHandle = await dirHandle.getFileHandle(defaultSaveFileName, {
+            create: true,
+          });
+          const now = Date.now();
+          projectDirHandleRef.current = dirHandle;
+          projectFileHandleRef.current = fileHandle;
+          hasSavedOnceRef.current = true;
+          savedFileNameRef.current = fileHandle.name;
+          savedFolderPathRef.current = dirHandle.name;
+          lastAutoSavedAtRef.current = now;
+          setHasSavedOnce(true);
+          setSavedFileName(fileHandle.name);
+          setSavedFolderPath(dirHandle.name);
+          setLastAutoSavedAt(now);
+          const targetKey = activeProjectIdRef.current || 'active_target';
+          await saveFileTargetToDb(
             {
-              description: 'Framecut Project',
-              accept: { 'application/json': ['.framecut.json', '.json'] },
+              handle: fileHandle,
+              dirHandle,
+              fileName: fileHandle.name,
+              folderPath: dirHandle.name,
+              hasSavedOnce: true,
             },
-          ],
-        });
-        projectFileHandleRef.current = handle;
-        hasSavedOnceRef.current = true;
-        setHasSavedOnce(true);
-        setSavedFileName(handle.name);
-        const targetKey = activeProjectIdRef.current || 'active_target';
-        await saveFileTargetToDb(
-          {
-            handle,
-            fileName: handle.name,
-            hasSavedOnce: true,
-          },
-          targetKey
-        );
-        const record = buildCurrentProjectRecord(true);
-        if (record) {
-          await saveProjectRecordToDb(record);
-        }
-        await syncLinkedFileNow(true);
-        triggerSavedFlash();
-        return;
-      } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') {
+            targetKey
+          );
+          const record = buildCurrentProjectRecord(true);
+          if (record) {
+            await saveProjectRecordToDb(record);
+            linkProjectFolderInLocalStorage(record, {
+              folderPath: dirHandle.name,
+              fileName: fileHandle.name,
+              hasSystemFolderHandle: true,
+            });
+          }
+          await syncLinkedFileNow(true);
+          triggerSavedFlash();
           return;
+        } catch (err) {
+          if (err instanceof DOMException && err.name === 'AbortError') {
+            return;
+          }
+          // Fall through to save file picker or inline modal
         }
-        // Cross-origin iframe SecurityError or browser restriction -> open file location modal
       }
-    }
 
-    setIsSaveLocationOpen(true);
-  }, [defaultSaveFileName, buildCurrentProjectRecord, syncLinkedFileNow, triggerSavedFlash]);
+      if (typeof win.showSaveFilePicker === 'function') {
+        try {
+          const handle = await win.showSaveFilePicker({
+            suggestedName: defaultSaveFileName,
+            types: [
+              {
+                description: 'HBL videolab Project',
+                accept: { 'application/json': ['.framecut.json', '.json'] },
+              },
+            ],
+          });
+          const now = Date.now();
+          const resolvedFolder = normalizeFolderPath(
+            savedFolderPathRef.current || getLastLinkedFolderPathFromLocalStorage(),
+            'HBL-Projects'
+          );
+          projectDirHandleRef.current = null;
+          projectFileHandleRef.current = handle;
+          hasSavedOnceRef.current = true;
+          savedFileNameRef.current = handle.name;
+          savedFolderPathRef.current = resolvedFolder;
+          lastAutoSavedAtRef.current = now;
+          setHasSavedOnce(true);
+          setSavedFileName(handle.name);
+          setSavedFolderPath(resolvedFolder);
+          setLastAutoSavedAt(now);
+          const targetKey = activeProjectIdRef.current || 'active_target';
+          await saveFileTargetToDb(
+            {
+              handle,
+              dirHandle: null,
+              fileName: handle.name,
+              folderPath: resolvedFolder,
+              hasSavedOnce: true,
+            },
+            targetKey
+          );
+          const record = buildCurrentProjectRecord(true);
+          if (record) {
+            await saveProjectRecordToDb(record);
+            linkProjectFolderInLocalStorage(record, {
+              folderPath: resolvedFolder,
+              fileName: handle.name,
+              hasSystemFolderHandle: false,
+            });
+          }
+          await syncLinkedFileNow(true);
+          triggerSavedFlash();
+          return;
+        } catch (err) {
+          if (err instanceof DOMException && err.name === 'AbortError') {
+            return;
+          }
+          // Cross-origin iframe SecurityError or browser restriction -> open file location modal
+        }
+      }
+
+      setIsSaveLocationOpen(true);
+    },
+    [defaultSaveFileName, buildCurrentProjectRecord, syncLinkedFileNow, triggerSavedFlash]
+  );
+
+  const handleDownloadProjectJson = useCallback(async (fileName: string) => {
+    const json = await serializeProjectFileJson(
+      latestProjectRef.current,
+      embeddedMediaCacheRef.current
+    );
+    exportProjectJsonDownload(json, fileName);
+  }, []);
 
   const handleConfirmFallbackSaveFile = useCallback(
-    async (fileName: string) => {
+    async (
+      fileName: string,
+      folderPath?: string,
+      pickedHandles?: {
+        fileHandle: SaveFileHandleLike;
+        dirHandle?: SaveDirectoryHandleLike | null;
+      }
+    ) => {
+      const cleanFolder = normalizeFolderPath(
+        folderPath,
+        savedFolderPathRef.current || getLastLinkedFolderPathFromLocalStorage() || 'HBL-Projects'
+      );
+      const now = Date.now();
       const json = await serializeProjectFileJson(
         latestProjectRef.current,
         embeddedMediaCacheRef.current
       );
-      const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = fileName;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.setTimeout(() => URL.revokeObjectURL(url), 4000);
 
-      projectFileHandleRef.current = null;
+      let activeFileHandle: SaveFileHandleLike | null = pickedHandles?.fileHandle ?? null;
+      let activeDirHandle: SaveDirectoryHandleLike | null = pickedHandles?.dirHandle ?? null;
+
+      if (activeFileHandle) {
+        projectFileHandleRef.current = activeFileHandle;
+        projectDirHandleRef.current = activeDirHandle;
+        await ensureHandleWritePermission(activeFileHandle, true);
+        await writeProjectToHandle(activeFileHandle, json);
+      } else if (
+        projectDirHandleRef.current &&
+        cleanFolder === normalizeFolderPath(savedFolderPathRef.current, cleanFolder)
+      ) {
+        // Keep the existing linked OS folder handle if saving inside the same folder
+        activeDirHandle = projectDirHandleRef.current;
+        try {
+          activeFileHandle = await activeDirHandle.getFileHandle(fileName, { create: true });
+          projectFileHandleRef.current = activeFileHandle;
+          await ensureHandleWritePermission(activeFileHandle, true);
+          await writeProjectToHandle(activeFileHandle, json);
+        } catch {
+          activeFileHandle = projectFileHandleRef.current;
+        }
+      } else {
+        // Pure LocalStorage + IndexedDB folder link (no forced browser download dialog)
+        projectFileHandleRef.current = null;
+        projectDirHandleRef.current = null;
+        activeFileHandle = null;
+        activeDirHandle = null;
+      }
+
       hasSavedOnceRef.current = true;
+      savedFileNameRef.current = fileName;
+      savedFolderPathRef.current = cleanFolder;
+      lastAutoSavedAtRef.current = now;
       setHasSavedOnce(true);
       setSavedFileName(fileName);
+      setSavedFolderPath(cleanFolder);
+      setLastAutoSavedAt(now);
       setIsSaveLocationOpen(false);
       const targetKey = activeProjectIdRef.current || 'active_target';
       await saveFileTargetToDb(
         {
-          handle: null,
+          handle: activeFileHandle,
+          dirHandle: activeDirHandle,
           fileName,
+          folderPath: cleanFolder,
           hasSavedOnce: true,
         },
         targetKey
@@ -3806,6 +4633,11 @@ export default function App() {
       const record = buildCurrentProjectRecord(true);
       if (record) {
         await saveProjectRecordToDb(record);
+        linkProjectFolderInLocalStorage(record, {
+          folderPath: cleanFolder,
+          fileName,
+          hasSystemFolderHandle: Boolean(activeDirHandle),
+        });
       }
       triggerSavedFlash();
     },
@@ -3813,27 +4645,54 @@ export default function App() {
   );
 
   const handleSaveProject = useCallback(async () => {
-    if (!hasSavedOnceRef.current && !projectFileHandleRef.current) {
-      await promptSaveFileLocation();
+    if (!hasSavedOnceRef.current && !projectFileHandleRef.current && !savedFolderPathRef.current) {
+      await promptSaveFileLocation('save');
       return;
     }
 
+    const now = Date.now();
+    lastAutoSavedAtRef.current = now;
+    setLastAutoSavedAt(now);
     const record = buildCurrentProjectRecord(true);
     if (record) {
       await saveProjectRecordToDb(record);
+      if (savedFolderPathRef.current || getProjectFolderLinkFromLocalStorage(record.id)) {
+        syncLinkedFolderLocalStorage(record, Boolean(projectDirHandleRef.current));
+      } else {
+        const fallbackFolder = normalizeFolderPath(
+          getLastLinkedFolderPathFromLocalStorage(),
+          'HBL-Projects'
+        );
+        savedFolderPathRef.current = fallbackFolder;
+        setSavedFolderPath(fallbackFolder);
+        const targetFileName = savedFileNameRef.current || defaultSaveFileName;
+        savedFileNameRef.current = targetFileName;
+        setSavedFileName(targetFileName);
+        linkProjectFolderInLocalStorage(record, {
+          folderPath: fallbackFolder,
+          fileName: targetFileName,
+          hasSystemFolderHandle: Boolean(projectDirHandleRef.current),
+        });
+      }
     }
-    if (projectFileHandleRef.current) {
+    if (projectFileHandleRef.current || projectDirHandleRef.current) {
       const ok = await syncLinkedFileNow(true);
       if (!ok) {
-        await promptSaveFileLocation();
+        await promptSaveFileLocation('save');
         return;
       }
     }
     triggerSavedFlash();
-  }, [promptSaveFileLocation, buildCurrentProjectRecord, syncLinkedFileNow, triggerSavedFlash]);
+  }, [
+    promptSaveFileLocation,
+    buildCurrentProjectRecord,
+    syncLinkedFileNow,
+    triggerSavedFlash,
+    defaultSaveFileName,
+  ]);
 
   const handleSaveProjectAs = useCallback(async () => {
-    await promptSaveFileLocation();
+    await promptSaveFileLocation('save-as');
   }, [promptSaveFileLocation]);
 
   handleSaveProjectRef.current = handleSaveProject;
@@ -3878,6 +4737,8 @@ export default function App() {
       setTimelineZoom(loaded.timelineZoom ?? 68);
       setSnapEnabled(loaded.snapEnabled ?? true);
       setSelectedClipIds(loaded.selectedClipIds ?? []);
+      setSelectedTrackId(null);
+      selectedTrackIdRef.current = null;
       setPreviewScale(loaded.previewScale ?? 'auto');
       setExtraTrackIds(loaded.extraTrackIds ?? []);
       setTrackSettings(
@@ -3890,18 +4751,42 @@ export default function App() {
       setAutoCaptionStatus(null);
 
       const savedTarget = await loadFileTargetFromDb(loaded.id);
+      const localFolderLink = getProjectFolderLinkFromLocalStorage(loaded.id);
       if (savedTarget) {
         projectFileHandleRef.current = savedTarget.handle;
-        const savedFlag = Boolean(savedTarget.hasSavedOnce || savedTarget.handle || loaded.hasSavedOnce);
+        projectDirHandleRef.current = savedTarget.dirHandle ?? null;
+        const savedFlag = Boolean(
+          savedTarget.hasSavedOnce ||
+            savedTarget.handle ||
+            loaded.hasSavedOnce ||
+            localFolderLink
+        );
         setHasSavedOnce(savedFlag);
         hasSavedOnceRef.current = savedFlag;
-        setSavedFileName(savedTarget.fileName ?? loaded.savedFileName ?? null);
+        const resolvedFileName =
+          savedTarget.fileName ?? loaded.savedFileName ?? localFolderLink?.fileName ?? null;
+        const resolvedFolder =
+          savedTarget.folderPath ?? loaded.savedFolderPath ?? localFolderLink?.folderPath ?? null;
+        setSavedFileName(resolvedFileName);
+        savedFileNameRef.current = resolvedFileName;
+        setSavedFolderPath(resolvedFolder);
+        savedFolderPathRef.current = resolvedFolder;
       } else {
         projectFileHandleRef.current = null;
-        setHasSavedOnce(Boolean(loaded.hasSavedOnce));
-        hasSavedOnceRef.current = Boolean(loaded.hasSavedOnce);
-        setSavedFileName(loaded.savedFileName ?? null);
+        projectDirHandleRef.current = null;
+        const savedFlag = Boolean(loaded.hasSavedOnce || localFolderLink);
+        setHasSavedOnce(savedFlag);
+        hasSavedOnceRef.current = savedFlag;
+        const resolvedFileName = loaded.savedFileName ?? localFolderLink?.fileName ?? null;
+        const resolvedFolder = loaded.savedFolderPath ?? localFolderLink?.folderPath ?? null;
+        setSavedFileName(resolvedFileName);
+        savedFileNameRef.current = resolvedFileName;
+        setSavedFolderPath(resolvedFolder);
+        savedFolderPathRef.current = resolvedFolder;
       }
+      const restoredAutoSave = loaded.lastAutoSavedAt ?? null;
+      setLastAutoSavedAt(restoredAutoSave);
+      lastAutoSavedAtRef.current = restoredAutoSave;
 
       await setCurrentProjectIdInDb(loaded.id);
       isProjectHydratedRef.current = true;
@@ -3917,16 +4802,74 @@ export default function App() {
       fps: 24 | 30 | 60;
       starter: 'blank' | 'sample';
     }) => {
+      const cleanTitle = opts.projectName.trim() || 'Untitled Sequence';
+      const slug =
+        cleanTitle
+          .replace(/[^a-zA-Z0-9._-]+/g, '-')
+          .replace(/^-+|-+$/g, '') || 'hbl-project';
+      const suggestedFileName = `${slug}.framecut.json`;
+
+      // Try opening native folder/file picker synchronously on the user click before DB awaits
+      let pickedDirHandle: SaveDirectoryHandleLike | null = null;
+      let pickedFileHandle: SaveFileHandleLike | null = null;
+      let pickedFolderName: string | null = null;
+      let pickedFileName: string | null = null;
+      const win = window as unknown as {
+        showDirectoryPicker?: (opts?: { mode?: 'read' | 'readwrite' }) => Promise<SaveDirectoryHandleLike>;
+        showSaveFilePicker?: (opts?: {
+          suggestedName?: string;
+          types?: Array<{
+            description?: string;
+            accept: Record<string, string[]>;
+          }>;
+        }) => Promise<SaveFileHandleLike>;
+      };
+
+      if (typeof win.showDirectoryPicker === 'function') {
+        try {
+          pickedDirHandle = await win.showDirectoryPicker({ mode: 'readwrite' });
+          pickedFileHandle = await pickedDirHandle.getFileHandle(suggestedFileName, {
+            create: true,
+          });
+          pickedFolderName = pickedDirHandle.name;
+          pickedFileName = pickedFileHandle.name;
+        } catch {
+          pickedDirHandle = null;
+          pickedFileHandle = null;
+        }
+      }
+      if (!pickedFileHandle && typeof win.showSaveFilePicker === 'function') {
+        try {
+          pickedFileHandle = await win.showSaveFilePicker({
+            suggestedName: suggestedFileName,
+            types: [
+              {
+                description: 'HBL videolab Project',
+                accept: { 'application/json': ['.framecut.json', '.json'] },
+              },
+            ],
+          });
+          pickedFileName = pickedFileHandle.name;
+          pickedFolderName = normalizeFolderPath(
+            getLastLinkedFolderPathFromLocalStorage(),
+            `HBL-Projects/${slug}`
+          );
+        } catch {
+          pickedFileHandle = null;
+        }
+      }
+
       const now = Date.now();
       const newId = uid('proj');
       const sample = opts.starter === 'sample' ? buildSampleProject() : null;
       const initialAssets = sample ? sample.assets.filter((a) => a.type !== 'motion') : [];
       const initialClips = sample ? sample.clips : [];
       const initialThumb = initialAssets.find((a) => a.type === 'image')?.thumbnailUrl;
+      const didPickNative = Boolean(pickedFileHandle);
 
       const newRecord: StoredProjectRecord = {
         id: newId,
-        projectName: opts.projectName.trim() || 'Untitled Sequence',
+        projectName: cleanTitle,
         aspectRatio: opts.aspectRatio,
         fps: opts.fps,
         currentTime: 0,
@@ -3941,17 +4884,46 @@ export default function App() {
         thumbnailDataUrl: initialThumb,
         createdAt: now,
         updatedAt: now,
-        hasSavedOnce: false,
-        savedFileName: null,
+        hasSavedOnce: didPickNative,
+        savedFileName: pickedFileName,
+        savedFolderPath: pickedFolderName,
+        lastAutoSavedAt: didPickNative ? now : null,
       };
 
       await saveProjectRecordToDb(newRecord);
+      if (pickedFileHandle) {
+        await saveFileTargetToDb(
+          {
+            handle: pickedFileHandle,
+            dirHandle: pickedDirHandle,
+            fileName: pickedFileName,
+            folderPath: pickedFolderName,
+            hasSavedOnce: true,
+          },
+          newId
+        );
+        if (pickedFolderName && pickedFileName) {
+          linkProjectFolderInLocalStorage(newRecord, {
+            folderPath: pickedFolderName,
+            fileName: pickedFileName,
+            hasSystemFolderHandle: Boolean(pickedDirHandle),
+          });
+        }
+      }
       await setCurrentProjectIdInDb(newId);
       const updatedList = await listProjectsFromDb();
       setProjects(updatedList);
       await handleOpenProject(newId);
+
+      if (pickedFileHandle) {
+        await syncLinkedFileNow(true);
+        triggerSavedFlash();
+      } else {
+        setSaveModalMode('new-project');
+        setIsSaveLocationOpen(true);
+      }
     },
-    [handleOpenProject]
+    [handleOpenProject, syncLinkedFileNow, triggerSavedFlash]
   );
 
   const handleGoHome = useCallback(async () => {
@@ -3961,8 +4933,11 @@ export default function App() {
       const record = buildCurrentProjectRecord(true);
       if (record) {
         await saveProjectRecordToDb(record);
+        if (hasSavedOnceRef.current || savedFolderPathRef.current) {
+          syncLinkedFolderLocalStorage(record, Boolean(projectDirHandleRef.current));
+        }
       }
-      if (projectFileHandleRef.current) {
+      if (projectFileHandleRef.current || projectDirHandleRef.current) {
         await syncLinkedFileNow(false);
       }
     }
@@ -4058,6 +5033,8 @@ export default function App() {
           setIsCustomMaskModalOpen(false);
         } else {
           setSelectedClipIds([]);
+          setSelectedTrackId(null);
+          selectedTrackIdRef.current = null;
         }
         return;
       }
@@ -4222,6 +5199,8 @@ export default function App() {
         onSaveProjectAs={() => void handleSaveProjectAs()}
         isProjectSavedFlash={isProjectSavedFlash}
         savedFileName={savedFileName}
+        savedFolderPath={savedFolderPath}
+        lastAutoSavedAt={lastAutoSavedAt}
         hasSavedOnce={hasSavedOnce}
         onOpenExport={() => {
           setIsPlaying(false);
@@ -4242,6 +5221,7 @@ export default function App() {
           downloadedEffectKeys={downloadedEffectKeys}
           hasSelectedClip={selectedClips.some((c) => !isAudioTrack(c.track))}
           hasSelectedVisualClip={selectedClips.some((c) => isVisualTrack(c.track))}
+          hasRenderableClips={clips.some((c) => !isAudioTrack(c.track))}
           onImportFiles={handleImportFiles}
           onImportFonts={handleImportFonts}
           onOpenAutoFonts={() => setIsFontLibraryOpen(true)}
@@ -4250,6 +5230,8 @@ export default function App() {
           onDownloadTransition={handleDownloadTransition}
           onDownloadAllTransitions={handleDownloadAllTransitions}
           onApplyTransition={handleApplyTransition}
+          onQuickAddTransition={handleQuickAddTransition}
+          onApplyTransitionToAll={handleApplyTransitionToAll}
           onDownloadEffectItem={handleDownloadEffectItem}
           onDownloadAllEffects={handleDownloadAllEffects}
           onDownloadAllFrames={handleDownloadAllFrames}
@@ -4265,6 +5247,11 @@ export default function App() {
           onAddAssetsToTimeline={(batch) => handleAddAssetsSerialToTimeline(batch)}
           onAddTitleTemplate={handleAddTitleTemplate}
           onAddSticker={(preset) => handleAddSticker(preset)}
+          onAddSfxToTimeline={(presetId) => void handleAddSfxToTimeline(presetId)}
+          onDownloadAllTitleTemplates={handleDownloadAllTitleTemplates}
+          customTitleTemplates={customTitleTemplates}
+          onSaveCustomTitleTemplate={handleSaveCustomTitleTemplate}
+          onDeleteCustomTitleTemplate={handleDeleteCustomTitleTemplate}
           captionCount={captionCount}
           defaultCaptionConfig={defaultCaptionConfig}
           autoSyncCaptions={autoSyncCaptions}
@@ -4295,6 +5282,8 @@ export default function App() {
             setIsTextStudioOpen(true);
           }}
           isImporting={isImporting}
+          defaultImageDuration={defaultImageDuration}
+          onChangeDefaultImageDuration={handleChangeDefaultImageDuration}
           width={panelSizes.mediaWidth}
         />
 
@@ -4457,6 +5446,11 @@ export default function App() {
           onDuplicateSelected={handleDuplicateSelected}
           onDeleteSelected={handleDeleteSelected}
           onClearSelection={() => setSelectedClipIds([])}
+          adjacentPrevClip={adjacentPrevClip}
+          adjacentNextClip={adjacentNextClip}
+          onApplySeamTransition={handleApplySeamTransition}
+          onApplyTransitionToAll={handleApplyTransitionToAll}
+          onSetBatchDuration={handleSetBatchDuration}
           width={panelSizes.inspectorWidth}
         />
       </div>
@@ -4487,7 +5481,11 @@ export default function App() {
         currentTime={currentTime}
         totalDuration={totalDuration}
         selectedClipIds={selectedClipIds}
-        onChangeSelection={setSelectedClipIds}
+        onChangeSelection={(ids) => {
+          setSelectedTrackId(null);
+          selectedTrackIdRef.current = null;
+          setSelectedClipIds(ids);
+        }}
         onSelectAll={handleSelectAllTimeline}
         onSeek={handleSeek}
         onMoveClips={handleMoveClips}
@@ -4509,6 +5507,7 @@ export default function App() {
           handleAddAssetsSerialToTimeline(found, dropTime, targetTrackId);
         }}
         onDropStickerAtTime={handleDropStickerAtTime}
+        onDropSfxAtTime={handleDropSfxAtTime}
         onDropTransitionOnClip={(clipId, transitionType) => {
           const preset = TRANSITIONS_CATALOG.find((t) => t.id === transitionType);
           handleUpdateClip(clipId, {
@@ -4586,9 +5585,21 @@ export default function App() {
               animationOutDuration: dur,
             });
           } else if (category === 'Combo') {
-            handleUpdateClip(clipId, {
-              animationCombo: animationId,
-            });
+            if (animationId === 'pan-zoom') {
+              const target = clipsRef.current.find((c) => c.id === clipId);
+              if (target && isVisualTrack(target.track)) {
+                handleUpdateClip(clipId, {
+                  ...buildPanZoomClipPatch(target),
+                  animationCombo: 'pan-zoom',
+                });
+              } else {
+                handleUpdateClip(clipId, { animationCombo: 'pan-zoom' });
+              }
+            } else {
+              handleUpdateClip(clipId, {
+                animationCombo: animationId,
+              });
+            }
           } else {
             handleUpdateClip(clipId, {
               animationIn: animationId,
@@ -4608,6 +5619,16 @@ export default function App() {
         onRemoveEmptyTrack={handleRemoveEmptyTrack}
         onToggleTrackLock={handleToggleTrackLock}
         onToggleTrackHide={handleToggleTrackHide}
+        selectedTrackId={selectedTrackId}
+        onSelectTrack={handleSelectTrack}
+        onDuplicateTrack={handleDuplicateTrack}
+        downloadedTransitionIds={downloadedTransitionIds}
+        onApplySeamTransition={handleApplySeamTransition}
+        onApplyTransitionToAll={handleApplyTransitionToAll}
+        onResizeTransition={handleResizeTransition}
+        onChangeClipVolume={handleChangeClipVolume}
+        onChangeTrackVolume={handleChangeTrackVolume}
+        onSetBatchDuration={handleSetBatchDuration}
         height={panelSizes.timelineHeight}
       />
 
@@ -4693,6 +5714,7 @@ export default function App() {
         onApplyFrameWithSettings={handleApplyFrameWithSettings}
         onApplyMaskWithSettings={handleApplyMaskWithSettings}
         onApplyTransitionWithSettings={handleApplyTransitionWithSettings}
+        onApplyTransitionToAll={handleApplyTransitionToAll}
         onApplyAnimationWithSettings={handleApplyAnimationWithSettings}
         onDownloadEffectItem={handleDownloadEffectItem}
         onDownloadTransition={handleDownloadTransition}
@@ -4723,9 +5745,16 @@ export default function App() {
 
       <SaveLocationModal
         isOpen={isSaveLocationOpen}
+        mode={saveModalMode}
+        projectName={projectName}
         defaultFileName={defaultSaveFileName}
+        defaultFolderPath={savedFolderPath ?? undefined}
+        hasLinkedSystemFolder={Boolean(projectDirHandleRef.current)}
         onClose={() => setIsSaveLocationOpen(false)}
-        onConfirmSaveFile={(fileName) => void handleConfirmFallbackSaveFile(fileName)}
+        onConfirmSaveFile={(fileName, folderPath, pickedHandles) =>
+          void handleConfirmFallbackSaveFile(fileName, folderPath, pickedHandles)
+        }
+        onDownloadProjectJson={(fileName) => void handleDownloadProjectJson(fileName)}
       />
 
       <CaptionStudioModal
@@ -4778,6 +5807,7 @@ export default function App() {
         onOpenAutoFonts={() => setIsFontLibraryOpen(true)}
         onInsertAdvancedText={handleInsertAdvancedText}
         onUpdateSelectedTextClip={(id, patch) => handleUpdateClip(id, patch, true)}
+        onSaveAsTemplate={handleSaveCustomTitleTemplate}
         onRescaleAllText={(nextScale, nextFontSize) => {
           const clampedScale = clamp(nextScale, 10, 600);
           commitClips((prev) =>

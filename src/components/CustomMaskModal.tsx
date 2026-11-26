@@ -6,6 +6,7 @@ import {
   FlipHorizontal2,
   Paintbrush,
   RotateCcw,
+  Search,
   Sparkles,
   Upload,
   X,
@@ -41,6 +42,7 @@ export function CustomMaskModal({
   const [mirrorX, setMirrorX] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [toolSearch, setToolSearch] = useState('');
 
   const seedDefaultShape = () => {
     const canvas = canvasRef.current;
@@ -57,6 +59,7 @@ export function CustomMaskModal({
   useEffect(() => {
     if (!isOpen) return;
     setErrorMsg(null);
+    setToolSearch('');
     setMaskName(`Custom Mask ${Math.floor(100 + Math.random() * 899)}`);
     const raf = requestAnimationFrame(() => seedDefaultShape());
     return () => cancelAnimationFrame(raf);
@@ -310,8 +313,35 @@ export function CustomMaskModal({
           </div>
 
           {/* Drawing Toolbar */}
+          {(() => {
+            const needle = toolSearch.trim().toLowerCase();
+            const showTool = (keywords: string) =>
+              !needle || keywords.toLowerCase().includes(needle);
+            return (
+          <div className="space-y-2">
+            <div className="relative">
+              <Search className="w-3 h-3 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={toolSearch}
+                onChange={(e) => setToolSearch(e.target.value)}
+                placeholder="Search mask tools & shapes (brush, mirror, star, heart, invert)..."
+                className="w-full pl-7 pr-6 py-1 text-[11px] text-slate-100 bg-[#07090F] border border-white/[0.09] rounded-md focus:outline-none focus:border-sky-400 placeholder:text-slate-500"
+              />
+              {toolSearch && (
+                <button
+                  type="button"
+                  onClick={() => setToolSearch('')}
+                  className="glow-btn absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-slate-400 hover:text-white border border-transparent"
+                  title="Clear search"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
           <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-lg bg-[#090B10] border border-white/[0.08]">
             <div className="flex items-center gap-1.5">
+              {showTool('brush draw') && (
               <button
                 type="button"
                 onClick={() => setTool('brush')}
@@ -324,6 +354,8 @@ export function CustomMaskModal({
                 <Paintbrush className="w-3.5 h-3.5" />
                 <span>Brush</span>
               </button>
+              )}
+              {showTool('eraser remove') && (
               <button
                 type="button"
                 onClick={() => setTool('eraser')}
@@ -336,6 +368,8 @@ export function CustomMaskModal({
                 <Eraser className="w-3.5 h-3.5" />
                 <span>Eraser</span>
               </button>
+              )}
+              {showTool('mirror flip horizontal symmetry') && (
               <button
                 type="button"
                 onClick={() => setMirrorX((m) => !m)}
@@ -349,8 +383,10 @@ export function CustomMaskModal({
                 <FlipHorizontal2 className="w-3.5 h-3.5" />
                 <span>Mirror</span>
               </button>
+              )}
             </div>
 
+            {showTool('brush size thickness') && (
             <div className="flex items-center gap-2">
               <span className="text-[11px] text-slate-400 font-mono">Size {brushSize}px</span>
               <input
@@ -362,8 +398,10 @@ export function CustomMaskModal({
                 className="w-24 studio-slider"
               />
             </div>
+            )}
 
             <div className="flex items-center gap-1">
+              {showTool('star shape') && (
               <button
                 type="button"
                 onClick={() => applyQuickStamp('star')}
@@ -371,6 +409,8 @@ export function CustomMaskModal({
               >
                 Star
               </button>
+              )}
+              {showTool('heart shape') && (
               <button
                 type="button"
                 onClick={() => applyQuickStamp('heart')}
@@ -378,6 +418,8 @@ export function CustomMaskModal({
               >
                 Heart
               </button>
+              )}
+              {showTool('diagonal slash shape') && (
               <button
                 type="button"
                 onClick={() => applyQuickStamp('slash')}
@@ -385,6 +427,8 @@ export function CustomMaskModal({
               >
                 Diagonal
               </button>
+              )}
+              {showTool('invert mask') && (
               <button
                 type="button"
                 onClick={handleInvertMaskCanvas}
@@ -392,6 +436,8 @@ export function CustomMaskModal({
               >
                 Invert
               </button>
+              )}
+              {showTool('clear reset') && (
               <button
                 type="button"
                 onClick={() => applyQuickStamp('clear')}
@@ -400,8 +446,12 @@ export function CustomMaskModal({
               >
                 <RotateCcw className="w-3 h-3" />
               </button>
+              )}
             </div>
           </div>
+          </div>
+            );
+          })()}
 
           {/* Drawing Surface */}
           <div

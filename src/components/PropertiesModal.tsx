@@ -15,6 +15,7 @@ import {
   Plus,
   RotateCcw,
   Scissors,
+  Search,
   Sliders,
   Smile,
   Sparkles,
@@ -29,6 +30,7 @@ import {
   ANIMATION_PRESETS,
   ASPECT_RATIO_DIMENSIONS,
   AspectRatio,
+  buildPanZoomClipPatch,
   BUILTIN_FONT_FAMILIES,
   CAPTION_STYLE_PRESETS,
   CaptionPositionPreset,
@@ -122,6 +124,7 @@ interface PropertiesModalProps {
     edge: 'in' | 'out' | 'both',
     duration: number
   ) => void;
+  onApplyTransitionToAll?: (transitionId: TransitionType, duration: number) => void;
   onApplyAnimationWithSettings: (
     animationId: ClipAnimationPreset,
     duration: number,
@@ -240,6 +243,39 @@ function PropSlider({
 
 const TITLE_COLORS = ['#FFFFFF', '#F8FAFC', '#FDE68A', '#93C5FD', '#FCA5A5', '#111827'];
 
+function ModalSearchInput({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <div className="relative">
+      <Search className="w-3 h-3 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full pl-7 pr-6 py-1 text-[11px] text-slate-100 bg-[#07090F] border border-white/[0.09] rounded-md focus:outline-none focus:border-sky-400 placeholder:text-slate-500"
+      />
+      {value && (
+        <button
+          type="button"
+          onClick={() => onChange('')}
+          className="glow-btn absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-slate-400 hover:text-white border border-transparent"
+          title="Clear search"
+        >
+          <X className="w-3 h-3" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function PropertiesModal({
   target,
   onClose,
@@ -275,6 +311,7 @@ export function PropertiesModal({
   onApplyFrameWithSettings,
   onApplyMaskWithSettings,
   onApplyTransitionWithSettings,
+  onApplyTransitionToAll,
   onApplyAnimationWithSettings,
   onDownloadEffectItem,
   onDownloadTransition,
@@ -317,9 +354,33 @@ export function PropertiesModal({
   const [tplDuration, setTplDuration] = useState(3.0);
   const [tplConfig, setTplConfig] = useState<TextConfig | null>(null);
 
+  // Compact search states across modal settings
+  const [assetSearch, setAssetSearch] = useState('');
+  const [clipSearch, setClipSearch] = useState('');
+  const [fontSearch, setFontSearch] = useState('');
+  const [captionPresetSearch, setCaptionPresetSearch] = useState('');
+  const [fxSearch, setFxSearch] = useState('');
+  const [frameSearch, setFrameSearch] = useState('');
+  const [maskSearch, setMaskSearch] = useState('');
+  const [transSearch, setTransSearch] = useState('');
+  const [animSearch, setAnimSearch] = useState('');
+  const [colorSearch, setColorSearch] = useState('');
+  const [toolSearch, setToolSearch] = useState('');
+
   useEffect(() => {
     if (!target) return;
     setClipTab('timing');
+    setAssetSearch('');
+    setClipSearch('');
+    setFontSearch('');
+    setCaptionPresetSearch('');
+    setFxSearch('');
+    setFrameSearch('');
+    setMaskSearch('');
+    setTransSearch('');
+    setAnimSearch('');
+    setColorSearch('');
+    setToolSearch('');
 
     if (target.kind === 'fx') {
       const info = VISUAL_EFFECT_PRESETS.find((x) => x.id === target.fxId);
@@ -472,6 +533,15 @@ export function PropertiesModal({
     (a) => a.builtIn || installedEffectSet.has(makeAnimationStorageKey(a.id))
   );
 
+  const fontNeedle = fontSearch.trim().toLowerCase();
+  const captionNeedle = captionPresetSearch.trim().toLowerCase();
+  const fxNeedle = fxSearch.trim().toLowerCase();
+  const frameNeedle = frameSearch.trim().toLowerCase();
+  const maskNeedle = maskSearch.trim().toLowerCase();
+  const transNeedle = transSearch.trim().toLowerCase();
+  const animNeedle = animSearch.trim().toLowerCase();
+  const colorNeedle = colorSearch.trim().toLowerCase();
+
   return (
     <div
       className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4"
@@ -512,8 +582,18 @@ export function PropertiesModal({
             const isVisualAsset = assetEntity.type !== 'audio';
             const isMotionSample = assetEntity.type === 'motion';
 
+            const assetNeedle = assetSearch.trim().toLowerCase();
+            const showAssetCard = (keywords: string) =>
+              !assetNeedle || keywords.toLowerCase().includes(assetNeedle);
+
             return (
               <div className="space-y-4">
+                <ModalSearchInput
+                  value={assetSearch}
+                  onChange={setAssetSearch}
+                  placeholder="Search asset settings (duration, fade, pan, fx, frame, audio)..."
+                />
+
                 {/* Preview & Info */}
                 <div className="flex items-center gap-3 p-3 rounded-lg bg-[#090C13] border border-white/[0.08]">
                   <div className="w-16 h-11 rounded bg-[#07090F] border border-white/[0.1] overflow-hidden flex items-center justify-center shrink-0">
@@ -545,6 +625,7 @@ export function PropertiesModal({
                 </div>
 
                 {/* Duration & Core Defaults */}
+                {showAssetCard('duration timing defaults display fade in fade out') && (
                 <div className="p-3.5 rounded-lg bg-[#090C13] border border-white/[0.08] space-y-3.5">
                   <div className="text-xs font-semibold text-sky-200 flex items-center justify-between">
                     <span>Duration & Timing Defaults</span>
@@ -598,9 +679,10 @@ export function PropertiesModal({
                     />
                   </div>
                 </div>
+                )}
 
                 {/* Visual Defaults (Image / Video / Motion) */}
-                {isVisualAsset && (
+                {isVisualAsset && showAssetCard('visual motion look scale opacity rotation ken burns color grade default effect fx frame anim pan loop') && (
                   <div className="p-3.5 rounded-lg bg-[#090C13] border border-white/[0.08] space-y-3.5">
                     <div className="text-xs font-semibold text-slate-200">
                       Visual, Motion & Look Settings
@@ -653,6 +735,7 @@ export function PropertiesModal({
                           <option value="zoom-out">Slow Zoom Out</option>
                           <option value="pan-left">Pan Left</option>
                           <option value="pan-right">Pan Right</option>
+                          <option value="pan-zoom">Pan &amp; Zoom (Keyframes)</option>
                         </select>
                       </div>
 
@@ -676,6 +759,13 @@ export function PropertiesModal({
                       </div>
                     </div>
 
+                    <div className="pt-1 space-y-2">
+                      <ModalSearchInput
+                        value={animSearch}
+                        onChange={setAnimSearch}
+                        placeholder="Search FX, frames, or loop/pan animations..."
+                      />
+                    </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1">
                         <label className="block text-xs text-slate-400">Default Effect</label>
@@ -688,11 +778,19 @@ export function PropertiesModal({
                           }
                           className="w-full px-2.5 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg focus:outline-none focus:border-sky-400"
                         >
-                          {availableEffects.map((fx) => (
-                            <option key={fx.id} value={fx.id}>
-                              {fx.id === 'none' ? 'Clean (None)' : fx.label}
-                            </option>
-                          ))}
+                          {availableEffects
+                            .filter(
+                              (fx) =>
+                                fx.id === 'none' ||
+                                fx.id === (assetEntity.defaultFxPreset ?? 'none') ||
+                                !animNeedle ||
+                                fx.label.toLowerCase().includes(animNeedle)
+                            )
+                            .map((fx) => (
+                              <option key={fx.id} value={fx.id}>
+                                {fx.id === 'none' ? 'Clean (None)' : fx.label}
+                              </option>
+                            ))}
                         </select>
                       </div>
 
@@ -707,11 +805,19 @@ export function PropertiesModal({
                           }
                           className="w-full px-2.5 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg focus:outline-none focus:border-sky-400"
                         >
-                          {availableFrames.map((fr) => (
-                            <option key={fr.id} value={fr.id}>
-                              {fr.label}
-                            </option>
-                          ))}
+                          {availableFrames
+                            .filter(
+                              (fr) =>
+                                fr.id === 'none' ||
+                                fr.id === (assetEntity.defaultFramePreset ?? 'none') ||
+                                !animNeedle ||
+                                fr.label.toLowerCase().includes(animNeedle)
+                            )
+                            .map((fr) => (
+                              <option key={fr.id} value={fr.id}>
+                                {fr.label}
+                              </option>
+                            ))}
                         </select>
                       </div>
                     </div>
@@ -730,7 +836,13 @@ export function PropertiesModal({
                         >
                           <option value="none">None</option>
                           {availableAnimations
-                            .filter((a) => a.category === 'In')
+                            .filter(
+                              (a) =>
+                                a.category === 'In' &&
+                                (a.id === (assetEntity.defaultAnimationIn ?? 'none') ||
+                                  !animNeedle ||
+                                  a.label.toLowerCase().includes(animNeedle))
+                            )
                             .map((a) => (
                               <option key={a.id} value={a.id}>
                                 {a.label}
@@ -751,7 +863,13 @@ export function PropertiesModal({
                         >
                           <option value="none">None</option>
                           {availableAnimations
-                            .filter((a) => a.category === 'Out')
+                            .filter(
+                              (a) =>
+                                a.category === 'Out' &&
+                                (a.id === (assetEntity.defaultAnimationOut ?? 'none') ||
+                                  !animNeedle ||
+                                  a.label.toLowerCase().includes(animNeedle))
+                            )
                             .map((a) => (
                               <option key={a.id} value={a.id}>
                                 {a.label}
@@ -772,7 +890,13 @@ export function PropertiesModal({
                         >
                           <option value="none">None</option>
                           {availableAnimations
-                            .filter((a) => a.category === 'Combo')
+                            .filter(
+                              (a) =>
+                                a.category === 'Combo' &&
+                                (a.id === (assetEntity.defaultAnimationCombo ?? 'none') ||
+                                  !animNeedle ||
+                                  a.label.toLowerCase().includes(animNeedle))
+                            )
                             .map((a) => (
                               <option key={a.id} value={a.id}>
                                 {a.label}
@@ -785,7 +909,8 @@ export function PropertiesModal({
                 )}
 
                 {/* Audio Defaults */}
-                {(assetEntity.type === 'audio' || assetEntity.type === 'video') && (
+                {(assetEntity.type === 'audio' || assetEntity.type === 'video') &&
+                  showAssetCard('audio defaults mute volume sound') && (
                   <div className="p-3.5 rounded-lg bg-[#090C13] border border-white/[0.08] space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-semibold text-slate-200">Audio Defaults</span>
@@ -868,6 +993,10 @@ export function PropertiesModal({
             const canSplitHere =
               currentTime > clipEntity.startTime + 0.1 &&
               currentTime < clipEntity.startTime + clipEntity.duration - 0.1;
+
+            const clipNeedle = clipSearch.trim().toLowerCase();
+            const showClipSection = (keywords: string) =>
+              !clipNeedle || keywords.toLowerCase().includes(clipNeedle);
 
             return (
               <div className="space-y-4">
@@ -978,8 +1107,15 @@ export function PropertiesModal({
                   </div>
                 </div>
 
+                <ModalSearchInput
+                  value={clipSearch}
+                  onChange={setClipSearch}
+                  placeholder="Search clip settings (duration, font, caption, color, pan, mask)..."
+                />
+
                 {clipTab === 'timing' && (
                   <div className="space-y-4">
+                    {showClipSection('clip label name') && (
                     <div className="space-y-1.5">
                       <label className="block text-xs text-slate-400">Clip Label</label>
                       <input
@@ -989,7 +1125,9 @@ export function PropertiesModal({
                         className="w-full px-3 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg focus:outline-none focus:border-sky-400"
                       />
                     </div>
+                    )}
 
+                    {showClipSection('start time duration fade in fade out timing') && (
                     <div className="grid grid-cols-2 gap-3 p-3.5 rounded-lg bg-[#090C13] border border-white/[0.08]">
                       <PropSlider
                         label="Start Time"
@@ -1031,8 +1169,9 @@ export function PropertiesModal({
                         onChange={(val) => onUpdateClip(clipEntity.id, { fadeOut: val })}
                       />
                     </div>
+                    )}
 
-                    {!isAudio && (
+                    {!isAudio && showClipSection('position x y scale opacity rotation ken burns camera transform') && (
                       <div className="p-3.5 rounded-lg bg-[#090C13] border border-white/[0.08] space-y-3">
                         <div className="grid grid-cols-2 gap-3">
                           <PropSlider
@@ -1085,11 +1224,14 @@ export function PropertiesModal({
                             <label className="block text-xs text-slate-400">Ken Burns Camera</label>
                             <select
                               value={clipEntity.kenBurns}
-                              onChange={(e) =>
-                                onUpdateClip(clipEntity.id, {
-                                  kenBurns: e.target.value as KenBurnsPreset,
-                                })
-                              }
+                              onChange={(e) => {
+                                const nextKb = e.target.value as KenBurnsPreset;
+                                if (nextKb === 'pan-zoom') {
+                                  onUpdateClip(clipEntity.id, buildPanZoomClipPatch(clipEntity));
+                                } else {
+                                  onUpdateClip(clipEntity.id, { kenBurns: nextKb });
+                                }
+                              }}
                               className="w-full px-2.5 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg"
                             >
                               <option value="none">Static</option>
@@ -1097,13 +1239,15 @@ export function PropertiesModal({
                               <option value="zoom-out">Slow Zoom Out</option>
                               <option value="pan-left">Pan Left</option>
                               <option value="pan-right">Pan Right</option>
+                              <option value="pan-zoom">Pan &amp; Zoom (Keyframes)</option>
                             </select>
                           </div>
                         )}
                       </div>
                     )}
 
-                    {(isAudio || clipAsset?.type === 'video') && (
+                    {(isAudio || clipAsset?.type === 'video') &&
+                      showClipSection('audio settings mute volume speed playback') && (
                       <div className="p-3.5 rounded-lg bg-[#090C13] border border-white/[0.08] space-y-3">
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-medium text-slate-200">Audio Settings</span>
@@ -1145,7 +1289,7 @@ export function PropertiesModal({
 
                 {clipTab === 'look' && !isAudio && (
                   <div className="space-y-4">
-                    {isSticker && clipEntity.stickerConfig && (
+                    {isSticker && clipEntity.stickerConfig && showClipSection('sticker label emoji size primary accent text badge') && (
                       <div className="p-3.5 rounded-lg bg-[#090C13] border border-white/[0.08] space-y-3">
                         <div className="grid grid-cols-[1fr_80px] gap-2.5">
                           <input
@@ -1261,7 +1405,7 @@ export function PropertiesModal({
                       </div>
                     )}
 
-                    {isTitle && clipEntity.textConfig && (
+                    {isTitle && clipEntity.textConfig && showClipSection('text font family align size scale color scrim caption subtitle outline margin highlight') && (
                       <div className="p-3.5 rounded-lg bg-[#090C13] border border-white/[0.08] space-y-3">
                         <textarea
                           rows={2}
@@ -1274,6 +1418,11 @@ export function PropertiesModal({
                           }
                           className="w-full px-3 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg resize-none focus:outline-none focus:border-sky-400"
                         />
+                        <ModalSearchInput
+                          value={fontSearch}
+                          onChange={setFontSearch}
+                          placeholder="Search fonts..."
+                        />
                         <div className="grid grid-cols-2 gap-3">
                           <select
                             value={clipEntity.textConfig.fontFamily}
@@ -1284,12 +1433,24 @@ export function PropertiesModal({
                             }
                             className="px-2.5 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg"
                           >
-                            {customFonts.map((f) => (
-                              <option key={f.id} value={f.family}>
-                                {f.family}
-                              </option>
-                            ))}
-                            {BUILTIN_FONT_FAMILIES.map((f) => (
+                            {customFonts
+                              .filter(
+                                (f) =>
+                                  f.family === clipEntity.textConfig!.fontFamily ||
+                                  !fontNeedle ||
+                                  f.family.toLowerCase().includes(fontNeedle)
+                              )
+                              .map((f) => (
+                                <option key={f.id} value={f.family}>
+                                  {f.family}
+                                </option>
+                              ))}
+                            {BUILTIN_FONT_FAMILIES.filter(
+                              (f) =>
+                                f === clipEntity.textConfig!.fontFamily ||
+                                !fontNeedle ||
+                                f.toLowerCase().includes(fontNeedle)
+                            ).map((f) => (
                               <option key={f} value={f}>
                                 {f}
                               </option>
@@ -1412,6 +1573,12 @@ export function PropertiesModal({
                             </label>
                           </div>
 
+                          <ModalSearchInput
+                            value={captionPresetSearch}
+                            onChange={setCaptionPresetSearch}
+                            placeholder="Search caption styles..."
+                          />
+
                           <div className="grid grid-cols-2 gap-2">
                             <select
                               value={clipEntity.textConfig.captionStyle ?? 'classic-sub'}
@@ -1425,7 +1592,13 @@ export function PropertiesModal({
                               }
                               className="px-2.5 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg"
                             >
-                              {CAPTION_STYLE_PRESETS.map((p) => (
+                              {CAPTION_STYLE_PRESETS.filter(
+                                (p) =>
+                                  p.id === (clipEntity.textConfig?.captionStyle ?? 'classic-sub') ||
+                                  !captionNeedle ||
+                                  p.label.toLowerCase().includes(captionNeedle) ||
+                                  p.category.toLowerCase().includes(captionNeedle)
+                              ).map((p) => (
                                 <option key={p.id} value={p.id}>
                                   {p.label}
                                 </option>
@@ -1549,6 +1722,7 @@ export function PropertiesModal({
                     )}
 
                     {/* Glow & Visual FX */}
+                    {showClipSection('glow visual fx effect blur glitch neon intensity') && (
                     <div className="p-3.5 rounded-lg bg-[#090C13] border border-white/[0.08] space-y-3">
                       <div className="text-xs font-semibold text-slate-200">Glow & Visual FX</div>
                       <div className="flex items-center gap-2">
@@ -1590,6 +1764,11 @@ export function PropertiesModal({
                         unit="%"
                         onChange={(val) => onUpdateClip(clipEntity.id, { glowIntensity: val })}
                       />
+                      <ModalSearchInput
+                        value={fxSearch}
+                        onChange={setFxSearch}
+                        placeholder="Search visual effects..."
+                      />
                       <select
                         value={clipEntity.fxPreset ?? 'none'}
                         onChange={(e) => {
@@ -1601,11 +1780,20 @@ export function PropertiesModal({
                         }}
                         className="w-full px-3 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg"
                       >
-                        {availableEffects.map((fx) => (
-                          <option key={fx.id} value={fx.id}>
-                            {fx.id === 'none' ? 'Clean (No FX)' : `${fx.label} (${fx.category})`}
-                          </option>
-                        ))}
+                        {availableEffects
+                          .filter(
+                            (fx) =>
+                              fx.id === 'none' ||
+                              fx.id === (clipEntity.fxPreset ?? 'none') ||
+                              !fxNeedle ||
+                              fx.label.toLowerCase().includes(fxNeedle) ||
+                              fx.category.toLowerCase().includes(fxNeedle)
+                          )
+                          .map((fx) => (
+                            <option key={fx.id} value={fx.id}>
+                              {fx.id === 'none' ? 'Clean (No FX)' : `${fx.label} (${fx.category})`}
+                            </option>
+                          ))}
                       </select>
                       {(clipEntity.fxPreset ?? 'none') !== 'none' && (
                         <PropSlider
@@ -1618,35 +1806,47 @@ export function PropertiesModal({
                         />
                       )}
                     </div>
+                    )}
 
                     {/* Color Grade */}
-                    {isVisual && (
+                    {isVisual && showClipSection('color grade brightness contrast saturation blur filter preset') && (
                       <div className="p-3.5 rounded-lg bg-[#090C13] border border-white/[0.08] space-y-3">
+                        <ModalSearchInput
+                          value={colorSearch}
+                          onChange={setColorSearch}
+                          placeholder="Search color presets..."
+                        />
                         <div className="grid grid-cols-5 gap-1">
-                          {(Object.keys(FILTER_PRESET_VALUES) as FilterPreset[]).map((pk) => (
-                            <button
-                              key={pk}
-                              type="button"
-                              onClick={() => {
-                                const vals = FILTER_PRESET_VALUES[pk];
-                                onUpdateClip(clipEntity.id, {
-                                  filterPreset: pk,
-                                  brightness: vals.brightness,
-                                  contrast: vals.contrast,
-                                  saturation: vals.saturation,
-                                  warmth: vals.warmth,
-                                  vignette: vals.vignette,
-                                });
-                              }}
-                              className={`glow-btn py-1 px-1 text-[10px] rounded border truncate ${
-                                clipEntity.filterPreset === pk
-                                  ? 'bg-sky-500/20 border-sky-400 text-sky-200'
-                                  : 'bg-[#07090F] border-white/[0.08] text-slate-400'
-                              }`}
-                            >
-                              {FILTER_PRESET_VALUES[pk].label}
-                            </button>
-                          ))}
+                          {(Object.keys(FILTER_PRESET_VALUES) as FilterPreset[])
+                            .filter(
+                              (pk) =>
+                                !colorNeedle ||
+                                FILTER_PRESET_VALUES[pk].label.toLowerCase().includes(colorNeedle)
+                            )
+                            .map((pk) => (
+                              <button
+                                key={pk}
+                                type="button"
+                                onClick={() => {
+                                  const vals = FILTER_PRESET_VALUES[pk];
+                                  onUpdateClip(clipEntity.id, {
+                                    filterPreset: pk,
+                                    brightness: vals.brightness,
+                                    contrast: vals.contrast,
+                                    saturation: vals.saturation,
+                                    warmth: vals.warmth,
+                                    vignette: vals.vignette,
+                                  });
+                                }}
+                                className={`glow-btn py-1 px-1 text-[10px] rounded border truncate ${
+                                  clipEntity.filterPreset === pk
+                                    ? 'bg-sky-500/20 border-sky-400 text-sky-200'
+                                    : 'bg-[#07090F] border-white/[0.08] text-slate-400'
+                                }`}
+                              >
+                                {FILTER_PRESET_VALUES[pk].label}
+                              </button>
+                            ))}
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                           <PropSlider
@@ -1690,9 +1890,14 @@ export function PropertiesModal({
 
                 {clipTab === 'overlay' && !isAudio && (
                   <div className="space-y-4">
-                    {isVisual && (
+                    {isVisual && showClipSection('frame overlay border size thickness') && (
                       <div className="p-3.5 rounded-lg bg-[#090C13] border border-white/[0.08] space-y-3">
                         <div className="text-xs font-semibold text-slate-200">Frame Overlay</div>
+                        <ModalSearchInput
+                          value={frameSearch}
+                          onChange={setFrameSearch}
+                          placeholder="Search frames..."
+                        />
                         <select
                           value={clipEntity.framePreset ?? 'none'}
                           onChange={(e) => {
@@ -1706,11 +1911,19 @@ export function PropertiesModal({
                           }}
                           className="w-full px-3 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg"
                         >
-                          {availableFrames.map((fr) => (
-                            <option key={fr.id} value={fr.id}>
-                              {fr.label}
-                            </option>
-                          ))}
+                          {availableFrames
+                            .filter(
+                              (fr) =>
+                                fr.id === 'none' ||
+                                fr.id === (clipEntity.framePreset ?? 'none') ||
+                                !frameNeedle ||
+                                fr.label.toLowerCase().includes(frameNeedle)
+                            )
+                            .map((fr) => (
+                              <option key={fr.id} value={fr.id}>
+                                {fr.label}
+                              </option>
+                            ))}
                         </select>
                         {(clipEntity.framePreset ?? 'none') !== 'none' && (
                           <div className="flex items-center gap-3">
@@ -1739,9 +1952,14 @@ export function PropertiesModal({
                       </div>
                     )}
 
-                    {isVisual && (
+                    {isVisual && showClipSection('video mask width height feather invert shape') && (
                       <div className="p-3.5 rounded-lg bg-[#090C13] border border-white/[0.08] space-y-3">
                         <div className="text-xs font-semibold text-slate-200">Video Mask</div>
+                        <ModalSearchInput
+                          value={maskSearch}
+                          onChange={setMaskSearch}
+                          placeholder="Search masks..."
+                        />
                         <select
                           value={clipEntity.maskShape ?? 'none'}
                           onChange={(e) =>
@@ -1756,11 +1974,19 @@ export function PropertiesModal({
                           }
                           className="w-full px-3 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg"
                         >
-                          {availableMasks.map((mk) => (
-                            <option key={mk.id} value={mk.id}>
-                              {mk.label}
-                            </option>
-                          ))}
+                          {availableMasks
+                            .filter(
+                              (mk) =>
+                                mk.id === 'none' ||
+                                mk.id === (clipEntity.maskShape ?? 'none') ||
+                                !maskNeedle ||
+                                mk.label.toLowerCase().includes(maskNeedle)
+                            )
+                            .map((mk) => (
+                              <option key={mk.id} value={mk.id}>
+                                {mk.label}
+                              </option>
+                            ))}
                         </select>
                         {(clipEntity.maskShape ?? 'none') !== 'none' && (
                           <div className="grid grid-cols-2 gap-3">
@@ -1804,7 +2030,14 @@ export function PropertiesModal({
                       </div>
                     )}
 
-                    <div className="p-3.5 rounded-lg bg-[#090C13] border border-white/[0.08] grid grid-cols-2 gap-3">
+                    {showClipSection('transition in out duration cut dissolve wipe') && (
+                    <div className="p-3.5 rounded-lg bg-[#090C13] border border-white/[0.08] space-y-3">
+                      <ModalSearchInput
+                        value={transSearch}
+                        onChange={setTransSearch}
+                        placeholder="Search transitions..."
+                      />
+                      <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-2">
                         <label className="block text-xs text-slate-400">Transition In</label>
                         <select
@@ -1817,11 +2050,18 @@ export function PropertiesModal({
                           className="w-full px-2.5 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg"
                         >
                           <option value="none">Cut (None)</option>
-                          {availableTransitions.map((t) => (
-                            <option key={t.id} value={t.id}>
-                              {t.label}
-                            </option>
-                          ))}
+                          {availableTransitions
+                            .filter(
+                              (t) =>
+                                t.id === (clipEntity.transitionIn ?? 'none') ||
+                                !transNeedle ||
+                                t.label.toLowerCase().includes(transNeedle)
+                            )
+                            .map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.label}
+                              </option>
+                            ))}
                         </select>
                         <PropSlider
                           label="In Duration"
@@ -1848,11 +2088,18 @@ export function PropertiesModal({
                           className="w-full px-2.5 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg"
                         >
                           <option value="none">Cut (None)</option>
-                          {availableTransitions.map((t) => (
-                            <option key={t.id} value={t.id}>
-                              {t.label}
-                            </option>
-                          ))}
+                          {availableTransitions
+                            .filter(
+                              (t) =>
+                                t.id === (clipEntity.transitionOut ?? 'none') ||
+                                !transNeedle ||
+                                t.label.toLowerCase().includes(transNeedle)
+                            )
+                            .map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.label}
+                              </option>
+                            ))}
                         </select>
                         <PropSlider
                           label="Out Duration"
@@ -1866,12 +2113,20 @@ export function PropertiesModal({
                           }
                         />
                       </div>
+                      </div>
                     </div>
+                    )}
 
+                    {showClipSection('clip animations in out loop pan drift bounce pulse spin intensity') && (
                     <div className="p-3.5 rounded-lg bg-[#090C13] border border-white/[0.08] space-y-3">
                       <div className="text-xs font-semibold text-slate-200">
                         Clip Animations (In, Out & Loop)
                       </div>
+                      <ModalSearchInput
+                        value={animSearch}
+                        onChange={setAnimSearch}
+                        placeholder="Search animations (pan, bounce, pulse)..."
+                      />
                       <div className="grid grid-cols-3 gap-2">
                         <div className="space-y-1">
                           <label className="block text-[11px] text-slate-400">In Anim</label>
@@ -1886,7 +2141,13 @@ export function PropertiesModal({
                           >
                             <option value="none">None</option>
                             {availableAnimations
-                              .filter((a) => a.category === 'In')
+                              .filter(
+                                (a) =>
+                                  a.category === 'In' &&
+                                  (a.id === (clipEntity.animationIn ?? 'none') ||
+                                    !animNeedle ||
+                                    a.label.toLowerCase().includes(animNeedle))
+                              )
                               .map((a) => (
                                 <option key={a.id} value={a.id}>
                                   {a.label}
@@ -1907,7 +2168,13 @@ export function PropertiesModal({
                           >
                             <option value="none">None</option>
                             {availableAnimations
-                              .filter((a) => a.category === 'Out')
+                              .filter(
+                                (a) =>
+                                  a.category === 'Out' &&
+                                  (a.id === (clipEntity.animationOut ?? 'none') ||
+                                    !animNeedle ||
+                                    a.label.toLowerCase().includes(animNeedle))
+                              )
                               .map((a) => (
                                 <option key={a.id} value={a.id}>
                                   {a.label}
@@ -1919,16 +2186,28 @@ export function PropertiesModal({
                           <label className="block text-[11px] text-slate-400">Loop Anim</label>
                           <select
                             value={clipEntity.animationCombo ?? 'none'}
-                            onChange={(e) =>
-                              onUpdateClip(clipEntity.id, {
-                                animationCombo: e.target.value as ClipAnimationPreset,
-                              })
-                            }
+                            onChange={(e) => {
+                              const val = e.target.value as ClipAnimationPreset;
+                              if (val === 'pan-zoom') {
+                                onUpdateClip(clipEntity.id, {
+                                  animationCombo: val,
+                                  ...buildPanZoomClipPatch(clipEntity),
+                                });
+                              } else {
+                                onUpdateClip(clipEntity.id, { animationCombo: val });
+                              }
+                            }}
                             className="w-full px-2 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg"
                           >
                             <option value="none">None</option>
                             {availableAnimations
-                              .filter((a) => a.category === 'Combo')
+                              .filter(
+                                (a) =>
+                                  a.category === 'Combo' &&
+                                  (a.id === (clipEntity.animationCombo ?? 'none') ||
+                                    !animNeedle ||
+                                    a.label.toLowerCase().includes(animNeedle))
+                              )
                               .map((a) => (
                                 <option key={a.id} value={a.id}>
                                   {a.label}
@@ -1948,6 +2227,7 @@ export function PropertiesModal({
                         }
                       />
                     </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -2393,7 +2673,7 @@ export function PropertiesModal({
                     onChange={setTransDuration}
                   />
                 </div>
-                <div className="flex items-center justify-end gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-2">
                   {!isReady && preset ? (
                     <button
                       type="button"
@@ -2404,26 +2684,41 @@ export function PropertiesModal({
                       <span>Download & Save Transition</span>
                     </button>
                   ) : (
-                    <button
-                      type="button"
-                      disabled={!hasSelectedRenderable}
-                      onClick={() => {
-                        onApplyTransitionWithSettings(
-                          target.transitionId,
-                          transEdge,
-                          transDuration
-                        );
-                        onClose();
-                      }}
-                      className="glow-btn-prism flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white rounded-lg disabled:opacity-40"
-                    >
-                      <Check className="w-3.5 h-3.5" />
-                      <span>
-                        {hasSelectedRenderable
-                          ? 'Apply Transition to Selected Clip'
-                          : 'Select a Clip First'}
-                      </span>
-                    </button>
+                    <>
+                      {onApplyTransitionToAll && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onApplyTransitionToAll(target.transitionId, transDuration);
+                            onClose();
+                          }}
+                          className="glow-btn flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-sky-100 bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/40 rounded-lg"
+                        >
+                          <Check className="w-3.5 h-3.5 text-sky-300" />
+                          <span>Apply All Clips</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={!hasSelectedRenderable}
+                        onClick={() => {
+                          onApplyTransitionWithSettings(
+                            target.transitionId,
+                            transEdge,
+                            transDuration
+                          );
+                          onClose();
+                        }}
+                        className="glow-btn-prism flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white rounded-lg disabled:opacity-40"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>
+                          {hasSelectedRenderable
+                            ? 'Apply Transition to Selected Clip'
+                            : 'Select a Clip First'}
+                        </span>
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
@@ -2454,6 +2749,13 @@ export function PropertiesModal({
                   allowInput
                   onChange={setTplDuration}
                 />
+                <div className="space-y-1.5">
+                  <ModalSearchInput
+                    value={fontSearch}
+                    onChange={setFontSearch}
+                    placeholder="Search template fonts..."
+                  />
+                </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
                     <label className="block text-xs text-slate-400">Font</label>
@@ -2464,12 +2766,24 @@ export function PropertiesModal({
                       }
                       className="w-full px-2.5 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg"
                     >
-                      {customFonts.map((f) => (
-                        <option key={f.id} value={f.family}>
-                          {f.family}
-                        </option>
-                      ))}
-                      {BUILTIN_FONT_FAMILIES.map((f) => (
+                      {customFonts
+                        .filter(
+                          (f) =>
+                            f.family === tplConfig.fontFamily ||
+                            !fontNeedle ||
+                            f.family.toLowerCase().includes(fontNeedle)
+                        )
+                        .map((f) => (
+                          <option key={f.id} value={f.family}>
+                            {f.family}
+                          </option>
+                        ))}
+                      {BUILTIN_FONT_FAMILIES.filter(
+                        (f) =>
+                          f === tplConfig.fontFamily ||
+                          !fontNeedle ||
+                          f.toLowerCase().includes(fontNeedle)
+                      ).map((f) => (
                         <option key={f} value={f}>
                           {f}
                         </option>
@@ -2522,9 +2836,20 @@ export function PropertiesModal({
           )}
 
           {/* 8. STUDIO TOOL PROPERTIES */}
-          {target.kind === 'tool' && (
+          {target.kind === 'tool' && (() => {
+            const toolNeedle = toolSearch.trim().toLowerCase();
+            const showToolRow = (keywords: string) =>
+              !toolNeedle || keywords.toLowerCase().includes(toolNeedle);
+
+            return (
             <div className="space-y-4">
               <p className="text-xs text-slate-300 leading-relaxed">{target.description}</p>
+
+              <ModalSearchInput
+                value={toolSearch}
+                onChange={setToolSearch}
+                placeholder="Search tool settings..."
+              />
 
               <div className="p-3.5 rounded-lg bg-[#090C13] border border-white/[0.08] space-y-3.5">
                 <div className="text-xs font-semibold text-sky-200">Tool & Workspace Settings</div>
@@ -2534,6 +2859,7 @@ export function PropertiesModal({
                   target.toolId === 'save-project' ||
                   target.toolId === 'clear-project') && (
                   <>
+                    {showToolRow('project name title') && (
                     <div className="space-y-1">
                       <label className="block text-xs text-slate-400">Project Name</label>
                       <input
@@ -2543,6 +2869,8 @@ export function PropertiesModal({
                         className="w-full px-3 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg focus:outline-none focus:border-sky-400"
                       />
                     </div>
+                    )}
+                    {showToolRow('canvas aspect ratio 16:9 9:16 1:1 4:5 resolution') && (
                     <div className="space-y-1.5">
                       <label className="block text-xs text-slate-400">Canvas Aspect Ratio</label>
                       <div className="grid grid-cols-4 gap-1 p-1 bg-[#07090F] rounded-lg border border-white/[0.06]">
@@ -2564,6 +2892,8 @@ export function PropertiesModal({
                         {ASPECT_RATIO_DIMENSIONS[aspectRatio].height}
                       </p>
                     </div>
+                    )}
+                    {showToolRow('sequence frame rate fps 24 30 60') && (
                     <div className="space-y-1.5">
                       <label className="block text-xs text-slate-400">Sequence Frame Rate</label>
                       <div className="grid grid-cols-3 gap-1 p-1 bg-[#07090F] rounded-lg border border-white/[0.06]">
@@ -2581,7 +2911,8 @@ export function PropertiesModal({
                         ))}
                       </div>
                     </div>
-                    {target.toolId === 'save-project' && (
+                    )}
+                    {target.toolId === 'save-project' && showToolRow('linked file auto save') && (
                       <div className="text-[11px] text-slate-400 font-mono">
                         {hasSavedOnce
                           ? `Linked file: ${savedFileName ?? 'Project saved'} (auto-saves on every move)`
@@ -2599,6 +2930,7 @@ export function PropertiesModal({
                   target.toolId === 'select-all' ||
                   target.toolId === 'add-text') && (
                   <>
+                    {showToolRow('magnetic clip snapping') && (
                     <label className="flex items-center justify-between text-xs text-slate-200 cursor-pointer">
                       <span>Magnetic Clip Snapping</span>
                       <input
@@ -2608,6 +2940,8 @@ export function PropertiesModal({
                         className="accent-sky-400 w-4 h-4 rounded"
                       />
                     </label>
+                    )}
+                    {showToolRow('timeline zoom scale') && (
                     <PropSlider
                       label="Timeline Zoom Scale"
                       value={timelineZoom}
@@ -2616,6 +2950,7 @@ export function PropertiesModal({
                       unit=" px/s"
                       onChange={onChangeTimelineZoom}
                     />
+                    )}
                   </>
                 )}
 
@@ -2623,26 +2958,35 @@ export function PropertiesModal({
                   target.toolId === 'preview-quality' ||
                   target.toolId === 'preview-audio') && (
                   <div className="space-y-3 text-xs text-slate-300">
+                    {showToolRow('playhead position') && (
                     <div className="flex justify-between">
                       <span className="text-slate-400">Playhead Position</span>
                       <span className="font-mono">{formatShortTime(currentTime)}</span>
                     </div>
+                    )}
+                    {showToolRow('playback state') && (
                     <div className="flex justify-between">
                       <span className="text-slate-400">Playback State</span>
                       <span className="font-mono">{isPlaying ? 'Playing' : 'Paused'}</span>
                     </div>
+                    )}
+                    {showToolRow('preview resolution hd fast') && (
                     <div className="flex justify-between">
                       <span className="text-slate-400">Preview Resolution</span>
                       <span className="font-mono text-sky-300">
                         {previewScale === 'half' ? '1/2 Res (Fast)' : 'HD Preview'}
                       </span>
                     </div>
+                    )}
+                    {showToolRow('audio output muted') && (
                     <div className="flex justify-between">
                       <span className="text-slate-400">Audio Output</span>
                       <span className={`font-mono ${isMuted || previewVolume === 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
                         {isMuted || previewVolume === 0 ? 'Muted' : 'Active'}
                       </span>
                     </div>
+                    )}
+                    {showToolRow('preview master volume') && (
                     <PropSlider
                       label="Preview Master Volume"
                       value={isMuted ? 0 : previewVolume}
@@ -2651,6 +2995,7 @@ export function PropertiesModal({
                       unit="%"
                       onChange={onChangePreviewVolume}
                     />
+                    )}
                   </div>
                 )}
 
@@ -2667,6 +3012,11 @@ export function PropertiesModal({
 
                 {target.toolId === 'caption-settings' && (
                   <div className="space-y-3">
+                    <ModalSearchInput
+                      value={captionPresetSearch}
+                      onChange={setCaptionPresetSearch}
+                      placeholder="Search caption presets..."
+                    />
                     <div className="grid grid-cols-2 gap-2">
                       <select
                         value={defaultCaptionConfig.captionStyle ?? 'classic-sub'}
@@ -2680,7 +3030,13 @@ export function PropertiesModal({
                         }
                         className="px-2.5 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg"
                       >
-                        {CAPTION_STYLE_PRESETS.map((p) => (
+                        {CAPTION_STYLE_PRESETS.filter(
+                          (p) =>
+                            p.id === (defaultCaptionConfig.captionStyle ?? 'classic-sub') ||
+                            !captionNeedle ||
+                            p.label.toLowerCase().includes(captionNeedle) ||
+                            p.category.toLowerCase().includes(captionNeedle)
+                        ).map((p) => (
                           <option key={p.id} value={p.id}>
                             {p.label}
                           </option>
@@ -2803,7 +3159,8 @@ export function PropertiesModal({
                 </button>
               </div>
             </div>
-          )}
+            );
+          })()}
         </div>
       </div>
     </div>

@@ -1,17 +1,64 @@
-import {
-  env,
-  pipeline,
-  Tensor,
-  type AutomaticSpeechRecognitionPipeline,
-} from '@huggingface/transformers';
+const TRANSFORMERS_CDN_URL =
+  'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2/dist/transformers.web.min.js';
 
-env.allowLocalModels = false;
-env.useBrowserCache = true;
-env.useWasmCache = true;
+interface TransformersTensor {
+  data: Float32Array | Int32Array | BigInt64Array | number[];
+  dims: number[];
+}
+
+interface AutomaticSpeechRecognitionPipeline {
+  (
+    audio: Float32Array,
+    options?: Record<string, unknown>
+  ): Promise<
+    | { text?: string; chunks?: Array<{ text?: unknown; timestamp?: unknown }> }
+    | Array<{ text?: string; chunks?: Array<{ text?: unknown; timestamp?: unknown }> }>
+  >;
+  model?: unknown;
+  processor?: unknown;
+}
+
+interface TransformersModule {
+  env: {
+    allowLocalModels: boolean;
+    useBrowserCache: boolean;
+    useWasmCache: boolean;
+  };
+  pipeline: (
+    task: 'automatic-speech-recognition',
+    model: string,
+    options?: Record<string, unknown>
+  ) => Promise<AutomaticSpeechRecognitionPipeline>;
+  Tensor: new (
+    type: string,
+    data: BigInt64Array | Float32Array | Int32Array,
+    dims: number[]
+  ) => TransformersTensor;
+}
 
 const WHISPER_MODEL_ID = 'onnx-community/whisper-tiny';
 
+let transformersModulePromise: Promise<TransformersModule> | null = null;
 let transcriberPromise: Promise<AutomaticSpeechRecognitionPipeline> | null = null;
+
+async function loadTransformers(): Promise<TransformersModule> {
+  if (!transformersModulePromise) {
+    transformersModulePromise = (
+      import(/* @vite-ignore */ TRANSFORMERS_CDN_URL) as Promise<TransformersModule>
+    )
+      .then((mod) => {
+        mod.env.allowLocalModels = false;
+        mod.env.useBrowserCache = true;
+        mod.env.useWasmCache = true;
+        return mod;
+      })
+      .catch((err) => {
+        transformersModulePromise = null;
+        throw err;
+      });
+  }
+  return transformersModulePromise;
+}
 
 export interface WhisperWorkerRequest {
   id: string;
@@ -77,6 +124,7 @@ async function detectWhisperLanguageCode(
   audio: Float32Array
 ): Promise<string | undefined> {
   try {
+    const { Tensor } = await loadTransformers();
     const model = transcriber.model as unknown as {
       generation_config?: {
         is_multilingual?: boolean;
@@ -131,30 +179,34 @@ async function detectWhisperLanguageCode(
 
 async function getTranscriber(requestId: string): Promise<AutomaticSpeechRecognitionPipeline> {
   if (!transcriberPromise) {
-    transcriberPromise = pipeline('automatic-speech-recognition', WHISPER_MODEL_ID, {
-      device: 'wasm',
-      dtype: {
-        encoder_model: 'q8',
-        decoder_model_merged: 'q8',
-      },
-      progress_callback: (info: {
-        status?: string;
-        file?: string;
-        progress?: number;
-      }) => {
-        const msg: WhisperWorkerResponse = {
-          id: requestId,
-          type: 'progress',
-          status: info.status || 'loading',
-          file: info.file,
-          progress: typeof info.progress === 'number' ? info.progress : undefined,
-        };
-        self.postMessage(msg);
-      },
-    }).catch((err) => {
-      transcriberPromise = null;
-      throw err;
-    });
+    transcriberPromise = loadTransformers()
+      .then(({ pipeline }) =>
+        pipeline('automatic-speech-recognition', WHISPER_MODEL_ID, {
+          device: 'wasm',
+          dtype: {
+            encoder_model: 'q8',
+            decoder_model_merged: 'q8',
+          },
+          progress_callback: (info: {
+            status?: string;
+            file?: string;
+            progress?: number;
+          }) => {
+            const msg: WhisperWorkerResponse = {
+              id: requestId,
+              type: 'progress',
+              status: info.status || 'loading',
+              file: info.file,
+              progress: typeof info.progress === 'number' ? info.progress : undefined,
+            };
+            self.postMessage(msg);
+          },
+        })
+      )
+      .catch((err) => {
+        transcriberPromise = null;
+        throw err;
+      });
   }
   return transcriberPromise;
 }

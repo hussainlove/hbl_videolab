@@ -1,5 +1,6 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  BookmarkPlus,
   Captions,
   Check,
   Download,
@@ -11,13 +12,16 @@ import {
   List,
   Loader2,
   Music,
+  Play,
   Plus,
   Search,
   Smile,
   Sparkles,
+  Square,
   Trash2,
   Type,
   Upload,
+  Volume2,
   X,
   Zap,
 } from 'lucide-react';
@@ -26,7 +30,6 @@ import {
   ANIMATION_PRESETS,
   AnimationCategory,
   AnimationPresetInfo,
-  BUILTIN_FONT_FAMILIES,
   ClipAnimationPreset,
   ContextPropertiesTarget,
   CustomFont,
@@ -43,6 +46,9 @@ import {
   StickerPresetInfo,
   TextConfig,
   TimelineClip,
+  TITLE_AND_LOWER_THIRD_TEMPLATES,
+  TitleTemplateCategory,
+  TitleTemplateItem,
   TransitionPreset,
   TransitionType,
   VISUAL_EFFECT_PRESETS,
@@ -50,16 +56,23 @@ import {
   VisualEffectInfo,
   VisualEffectPreset,
 } from '../types/editor';
+import {
+  FAMOUS_SFX_CATALOG,
+  SfxCategory,
+  SfxPresetInfo,
+  synthesizeSfxTrack,
+} from '../utils/audioSynth';
 import { CaptionCue } from '../utils/captions';
 import {
   makeAnimationStorageKey,
   makeFrameStorageKey,
   makeFxStorageKey,
   makeMaskStorageKey,
+  makeTitleStorageKey,
 } from '../utils/effectsStorage';
 import { downloadCustomMaskPng } from '../utils/maskStorage';
 import { TRANSITIONS_CATALOG } from '../utils/transitionsStorage';
-import { clamp, formatShortTime } from '../utils/time';
+import { clamp, formatShortTime, uid } from '../utils/time';
 import type { TextPresetSeed } from './TextStudioModal';
 
 interface MediaBinProps {
@@ -70,6 +83,7 @@ interface MediaBinProps {
   downloadedEffectKeys: string[];
   hasSelectedClip: boolean;
   hasSelectedVisualClip: boolean;
+  hasRenderableClips?: boolean;
   onImportFiles: (files: FileList) => Promise<void>;
   onImportFonts: (files: FileList) => Promise<CustomFont | null>;
   onOpenAutoFonts: () => void;
@@ -78,6 +92,8 @@ interface MediaBinProps {
   onDownloadTransition: (preset: TransitionPreset) => Promise<void>;
   onDownloadAllTransitions: () => Promise<void>;
   onApplyTransition: (type: TransitionType, edge: 'in' | 'out', defaultDuration: number) => void;
+  onQuickAddTransition?: (type: TransitionType, defaultDuration: number) => void;
+  onApplyTransitionToAll?: (type: TransitionType, defaultDuration: number) => void;
   onDownloadEffectItem: (key: string, label: string) => Promise<void>;
   onDownloadAllEffects: () => Promise<void>;
   onDownloadAllFrames: () => Promise<void>;
@@ -96,6 +112,11 @@ interface MediaBinProps {
   onAddAssetsToTimeline: (assets: MediaAsset[]) => void;
   onAddTitleTemplate: (name: string, config: TextConfig, x?: number, y?: number, duration?: number) => void;
   onAddSticker: (preset: StickerPresetInfo) => void;
+  onAddSfxToTimeline?: (presetId: string) => void;
+  onDownloadAllTitleTemplates?: () => Promise<void>;
+  customTitleTemplates?: TitleTemplateItem[];
+  onSaveCustomTitleTemplate?: (tpl: TitleTemplateItem) => void;
+  onDeleteCustomTitleTemplate?: (id: string) => void;
   captionCount: number;
   captionClips?: TimelineClip[];
   currentTime?: number;
@@ -134,6 +155,8 @@ interface MediaBinProps {
   onOpenCaptionStudio?: () => void;
   onOpenTextStudio?: (seed?: TextPresetSeed) => void;
   isImporting: boolean;
+  defaultImageDuration?: number;
+  onChangeDefaultImageDuration?: (sec: number) => void;
   width?: number;
 }
 
@@ -143,11 +166,15 @@ const serialCollator = new Intl.Collator(undefined, {
 });
 
 function compareSerialWise(a: MediaAsset, b: MediaAsset): number {
-  return serialCollator.compare(a.name, b.name);
+  const numCmp = serialCollator.compare(a.name, b.name);
+  if (numCmp !== 0) return numCmp;
+  return a.name.localeCompare(b.name);
 }
 
-type BinTab = 'media' | 'titles' | 'stickers' | 'backdrops' | 'transitions';
+type BinTab = 'media' | 'titles' | 'stickers' | 'transitions' | 'sfx' | 'backdrops';
 type TitlesSubTab = 'titles' | 'captions';
+type TitleCategoryFilter = 'All' | TitleTemplateCategory;
+type SfxCategoryFilter = 'All' | SfxCategory;
 type MediaViewMode = 'list' | 'grid';
 type StickerCategoryFilter = 'All' | StickerCategory;
 type FxSubTab = 'effects' | 'frames' | 'masks' | 'animations' | 'transitions';
@@ -187,88 +214,6 @@ function SectionSearchBar({
   );
 }
 
-const TITLE_TEMPLATES: Array<{
-  id: string;
-  name: string;
-  subtitle: string;
-  x: number;
-  y: number;
-  config: TextConfig;
-}> = [
-  {
-    id: 'headline',
-    name: 'Center Headline',
-    subtitle: 'Bold display title',
-    x: 0,
-    y: 0,
-    config: {
-      text: 'Main Sequence Title',
-      fontFamily: 'Plus Jakarta Sans',
-      fontSize: 68,
-      fontWeight: 700,
-      color: '#FFFFFF',
-      align: 'center',
-      hasScrim: false,
-      scrimOpacity: 60,
-      animation: 'slide-up',
-    },
-  },
-  {
-    id: 'lower-third',
-    name: 'Lower Third',
-    subtitle: 'Editorial monospace tag',
-    x: -36,
-    y: 34,
-    config: {
-      text: 'Location  ·  04:20 PM',
-      fontFamily: 'JetBrains Mono',
-      fontSize: 30,
-      fontWeight: 500,
-      color: '#F8FAFC',
-      align: 'left',
-      hasScrim: true,
-      scrimOpacity: 74,
-      animation: 'fade',
-    },
-  },
-  {
-    id: 'serif-chapter',
-    name: 'Editorial Serif',
-    subtitle: 'Chapter card typography',
-    x: 0,
-    y: -4,
-    config: {
-      text: 'Chapter One\nQuiet Horizon',
-      fontFamily: 'Playfair Display',
-      fontSize: 64,
-      fontWeight: 600,
-      color: '#FFFBEB',
-      align: 'center',
-      hasScrim: false,
-      scrimOpacity: 50,
-      animation: 'scale',
-    },
-  },
-  {
-    id: 'kinetic-impact',
-    name: 'Condensed Impact',
-    subtitle: 'Athletic bold callout',
-    x: 0,
-    y: 0,
-    config: {
-      text: 'BUILT FOR SPEED',
-      fontFamily: 'Oswald',
-      fontSize: 78,
-      fontWeight: 700,
-      color: '#FFFFFF',
-      align: 'center',
-      hasScrim: true,
-      scrimOpacity: 55,
-      animation: 'scale',
-    },
-  },
-];
-
 export function MediaBin({
   assets,
   customFonts,
@@ -277,6 +222,7 @@ export function MediaBin({
   downloadedEffectKeys,
   hasSelectedClip,
   hasSelectedVisualClip,
+  hasRenderableClips = true,
   onImportFiles,
   onImportFonts,
   onOpenAutoFonts,
@@ -285,6 +231,8 @@ export function MediaBin({
   onDownloadTransition,
   onDownloadAllTransitions,
   onApplyTransition,
+  onQuickAddTransition,
+  onApplyTransitionToAll,
   onDownloadEffectItem,
   onDownloadAllEffects,
   onDownloadAllFrames,
@@ -300,6 +248,11 @@ export function MediaBin({
   onAddAssetsToTimeline,
   onAddTitleTemplate,
   onAddSticker,
+  onAddSfxToTimeline,
+  onDownloadAllTitleTemplates,
+  customTitleTemplates = [],
+  onSaveCustomTitleTemplate,
+  onDeleteCustomTitleTemplate,
   captionCount,
   captionClips = [],
   currentTime = 0,
@@ -327,10 +280,17 @@ export function MediaBin({
   onOpenCaptionStudio,
   onOpenTextStudio,
   isImporting,
+  defaultImageDuration = 4,
+  onChangeDefaultImageDuration,
   width = 272,
 }: MediaBinProps) {
   const [tab, setTab] = useState<BinTab>('media');
   const [titlesSubTab, setTitlesSubTab] = useState<TitlesSubTab>('titles');
+  const [titleCategory, setTitleCategory] = useState<TitleCategoryFilter>('All');
+  const [sfxCategory, setSfxCategory] = useState<SfxCategoryFilter>('All');
+  const [playingSfxId, setPlayingSfxId] = useState<string | null>(null);
+  const sfxAudioRef = useRef<HTMLAudioElement | null>(null);
+  const sfxUrlCacheRef = useRef<Map<string, string>>(new Map());
   const [mediaViewMode, setMediaViewMode] = useState<MediaViewMode>(() => {
     try {
       const saved = window.localStorage.getItem('framecut.mediaViewMode');
@@ -348,6 +308,7 @@ export function MediaBin({
   const [mediaQuery, setMediaQuery] = useState('');
   const [titlesQuery, setTitlesQuery] = useState('');
   const [stickersQuery, setStickersQuery] = useState('');
+  const [sfxQuery, setSfxQuery] = useState('');
   const [effectsQuery, setEffectsQuery] = useState('');
   const [framesQuery, setFramesQuery] = useState('');
   const [masksQuery, setMasksQuery] = useState('');
@@ -357,9 +318,54 @@ export function MediaBin({
 
   const [isDragOver, setIsDragOver] = useState(false);
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
+  const [visibleMediaLimit, setVisibleMediaLimit] = useState(120);
+  const [imageDurDraft, setImageDurDraft] = useState(String(defaultImageDuration));
+  const [isEditingImageDur, setIsEditingImageDur] = useState(false);
   const anchorAssetIdRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fontInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const cache = sfxUrlCacheRef.current;
+    return () => {
+      if (sfxAudioRef.current) {
+        sfxAudioRef.current.pause();
+        sfxAudioRef.current = null;
+      }
+      for (const url of cache.values()) {
+        URL.revokeObjectURL(url);
+      }
+      cache.clear();
+    };
+  }, []);
+
+  const stopSfxPreview = () => {
+    if (sfxAudioRef.current) {
+      sfxAudioRef.current.pause();
+      sfxAudioRef.current.currentTime = 0;
+    }
+    setPlayingSfxId(null);
+  };
+
+  const handleToggleSfxPreview = (sfx: SfxPresetInfo) => {
+    if (playingSfxId === sfx.id) {
+      stopSfxPreview();
+      return;
+    }
+    stopSfxPreview();
+    let previewUrl = sfxUrlCacheRef.current.get(sfx.id);
+    if (!previewUrl) {
+      const synth = synthesizeSfxTrack(sfx.id);
+      previewUrl = synth.url;
+      sfxUrlCacheRef.current.set(sfx.id, previewUrl);
+    }
+    const audio = new Audio(previewUrl);
+    audio.volume = 0.85;
+    audio.onended = () => setPlayingSfxId((cur) => (cur === sfx.id ? null : cur));
+    sfxAudioRef.current = audio;
+    setPlayingSfxId(sfx.id);
+    void audio.play().catch(() => setPlayingSfxId(null));
+  };
 
   const handleSetMediaViewMode = (mode: MediaViewMode) => {
     setMediaViewMode(mode);
@@ -445,27 +451,62 @@ export function MediaBin({
     );
   });
 
-  const mediaAssets = assets.filter((a) => a.type !== 'motion').sort(compareSerialWise);
+  const mediaAssets = useMemo(
+    () => assets.filter((a) => a.type !== 'motion').sort(compareSerialWise),
+    [assets]
+  );
   const mediaNeedle = mediaQuery.trim().toLowerCase();
-  const filteredMediaAssets = mediaNeedle
-    ? mediaAssets.filter(
-        (a) =>
-          a.name.toLowerCase().includes(mediaNeedle) ||
-          a.type.toLowerCase().includes(mediaNeedle)
-      )
-    : mediaAssets;
+  const filteredMediaAssets = useMemo(
+    () =>
+      mediaNeedle
+        ? mediaAssets.filter(
+            (a) =>
+              a.name.toLowerCase().includes(mediaNeedle) ||
+              a.type.toLowerCase().includes(mediaNeedle)
+          )
+        : mediaAssets,
+    [mediaAssets, mediaNeedle]
+  );
+  const renderedMediaAssets = useMemo(
+    () => filteredMediaAssets.slice(0, visibleMediaLimit),
+    [filteredMediaAssets, visibleMediaLimit]
+  );
 
+  const allTitleTemplates = useMemo(
+    () => [...TITLE_AND_LOWER_THIRD_TEMPLATES, ...customTitleTemplates],
+    [customTitleTemplates]
+  );
+  const pendingTitleTemplates = allTitleTemplates.filter(
+    (t) =>
+      !t.builtIn &&
+      !t.isCustom &&
+      !installedEffectSet.has(makeTitleStorageKey(t.id))
+  );
   const titlesNeedle = titlesQuery.trim().toLowerCase();
-  const filteredTitleTemplates = titlesNeedle
-    ? TITLE_TEMPLATES.filter(
-        (t) =>
-          t.name.toLowerCase().includes(titlesNeedle) ||
-          t.subtitle.toLowerCase().includes(titlesNeedle)
-      )
-    : TITLE_TEMPLATES;
+  const filteredTitleTemplates = allTitleTemplates.filter((t) => {
+    if (titleCategory !== 'All' && t.category !== titleCategory) return false;
+    if (!titlesNeedle) return true;
+    return (
+      t.name.toLowerCase().includes(titlesNeedle) ||
+      t.subtitle.toLowerCase().includes(titlesNeedle) ||
+      t.category.toLowerCase().includes(titlesNeedle) ||
+      t.config.text.toLowerCase().includes(titlesNeedle)
+    );
+  });
   const filteredCustomFonts = titlesNeedle
     ? customFonts.filter((f) => f.family.toLowerCase().includes(titlesNeedle))
     : customFonts;
+
+  const sfxNeedle = sfxQuery.trim().toLowerCase();
+  const filteredSfxCatalog = FAMOUS_SFX_CATALOG.filter((s) => {
+    if (sfxCategory !== 'All' && s.category !== sfxCategory) return false;
+    if (!sfxNeedle) return true;
+    return (
+      s.label.toLowerCase().includes(sfxNeedle) ||
+      s.category.toLowerCase().includes(sfxNeedle) ||
+      s.description.toLowerCase().includes(sfxNeedle)
+    );
+  });
 
   const motionNeedle = motionQuery.trim().toLowerCase();
   const motionAssets = motionNeedle
@@ -484,11 +525,19 @@ export function MediaBin({
     );
   });
 
-  const validSelectedIds = selectedAssetIds.filter((id) =>
-    mediaAssets.some((a) => a.id === id)
+  const mediaAssetIdSet = useMemo(
+    () => new Set(mediaAssets.map((a) => a.id)),
+    [mediaAssets]
   );
-  const selectedAssetSet = new Set(validSelectedIds);
-  const selectedAssetsOrdered = mediaAssets.filter((a) => selectedAssetSet.has(a.id));
+  const validSelectedIds = useMemo(
+    () => selectedAssetIds.filter((id) => mediaAssetIdSet.has(id)),
+    [selectedAssetIds, mediaAssetIdSet]
+  );
+  const selectedAssetSet = useMemo(() => new Set(validSelectedIds), [validSelectedIds]);
+  const selectedAssetsOrdered = useMemo(
+    () => mediaAssets.filter((a) => selectedAssetSet.has(a.id)),
+    [mediaAssets, selectedAssetSet]
+  );
 
   const handleAssetClick = (e: React.MouseEvent, asset: MediaAsset) => {
     if ((e.target as HTMLElement).closest('button')) return;
@@ -528,11 +577,11 @@ export function MediaBin({
     >
       {/* Segmented Library Tabs */}
       <div className="p-2 @[250px]:p-3 border-b border-white/[0.08] overflow-x-auto studio-scroll-thin">
-        <div className="grid grid-cols-5 gap-0.5 @[240px]:gap-1 p-1 bg-[#07090F] rounded-lg border border-white/[0.06]">
+        <div className="grid grid-cols-6 gap-0.5 @[240px]:gap-1 p-1 bg-[#07090F] rounded-lg border border-white/[0.06]">
           <button
             type="button"
             onClick={() => setTab('media')}
-            className={`glow-btn py-1.5 px-0.5 text-[9.5px] @[260px]:text-[10.5px] font-medium rounded-md border border-transparent whitespace-nowrap truncate ${
+            className={`glow-btn py-1.5 px-0.5 text-[9px] @[260px]:text-[10px] font-medium rounded-md border border-transparent whitespace-nowrap truncate ${
               tab === 'media'
                 ? 'bg-[#1A2130] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
                 : 'text-slate-400 hover:text-white'
@@ -543,30 +592,43 @@ export function MediaBin({
           <button
             type="button"
             onClick={() => setTab('titles')}
-            className={`glow-btn py-1.5 px-0.5 text-[9.5px] @[260px]:text-[10.5px] font-medium rounded-md border border-transparent whitespace-nowrap truncate ${
+            className={`glow-btn py-1.5 px-0.5 text-[9px] @[260px]:text-[10px] font-medium rounded-md border border-transparent whitespace-nowrap truncate ${
               tab === 'titles'
                 ? 'bg-[#1A2130] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
                 : 'text-slate-400 hover:text-white'
             }`}
+            title="Title Templates, Lower Third Formats & Unlimited Downloads"
           >
             Titles
           </button>
           <button
             type="button"
             onClick={() => setTab('stickers')}
-            className={`glow-btn py-1.5 px-0.5 text-[9.5px] @[260px]:text-[10.5px] font-medium rounded-md border whitespace-nowrap truncate ${
+            className={`glow-btn py-1.5 px-0.5 text-[9px] @[260px]:text-[10px] font-medium rounded-md border whitespace-nowrap truncate ${
               tab === 'stickers'
                 ? 'bg-gradient-to-r from-fuchsia-600/30 via-purple-500/25 to-amber-500/20 text-fuchsia-200 border-fuchsia-400/35'
                 : 'text-slate-400 hover:text-white border-transparent'
             }`}
-            title="Famous Social, Reaction, Badge & Arrow Stickers"
+            title="All Social Media, Reaction, Badge & Arrow Stickers"
           >
             Stickers
           </button>
           <button
             type="button"
+            onClick={() => setTab('sfx')}
+            className={`glow-btn py-1.5 px-0.5 text-[9px] @[260px]:text-[10px] font-medium rounded-md border whitespace-nowrap truncate ${
+              tab === 'sfx'
+                ? 'bg-gradient-to-r from-emerald-600/30 via-teal-500/25 to-cyan-500/20 text-emerald-200 border-emerald-400/35'
+                : 'text-slate-400 hover:text-white border-transparent'
+            }`}
+            title="Sound VFX Library (Click, File Drop, Typing, Whoosh, Boom & More)"
+          >
+            SFX
+          </button>
+          <button
+            type="button"
             onClick={() => setTab('transitions')}
-            className={`glow-btn py-1.5 px-0.5 text-[9.5px] @[260px]:text-[10.5px] font-medium rounded-md border whitespace-nowrap truncate ${
+            className={`glow-btn py-1.5 px-0.5 text-[9px] @[260px]:text-[10px] font-medium rounded-md border whitespace-nowrap truncate ${
               tab === 'transitions'
                 ? 'bg-gradient-to-r from-blue-600/30 via-purple-500/25 to-cyan-500/25 text-sky-200 border-sky-400/30'
                 : 'text-slate-400 hover:text-white border-transparent'
@@ -578,7 +640,7 @@ export function MediaBin({
           <button
             type="button"
             onClick={() => setTab('backdrops')}
-            className={`glow-btn py-1.5 px-0.5 text-[9.5px] @[260px]:text-[10.5px] font-medium rounded-md border border-transparent whitespace-nowrap truncate ${
+            className={`glow-btn py-1.5 px-0.5 text-[9px] @[260px]:text-[10px] font-medium rounded-md border border-transparent whitespace-nowrap truncate ${
               tab === 'backdrops'
                 ? 'bg-[#1A2130] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
                 : 'text-slate-400 hover:text-white'
@@ -685,35 +747,93 @@ export function MediaBin({
               }}
             />
 
-            {mediaAssets.length > 0 && selectedAssetsOrdered.length > 0 && (
-              <div className="flex items-center justify-between gap-1.5 pt-0.5">
+            {mediaAssets.length > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-1.5 pt-0.5">
                 <div className="flex items-center gap-1.5 min-w-0">
                   <button
                     type="button"
                     onClick={() =>
                       setSelectedAssetIds(
-                        validSelectedIds.length === mediaAssets.length
+                        validSelectedIds.length === filteredMediaAssets.length &&
+                          filteredMediaAssets.length > 0
                           ? []
-                          : mediaAssets.map((a) => a.id)
+                          : filteredMediaAssets.map((a) => a.id)
                       )
                     }
-                    className="glow-btn px-2 py-1 rounded text-[11px] font-medium text-slate-300 hover:text-white border border-transparent whitespace-nowrap"
+                    className="glow-btn px-2 py-1 rounded text-[11px] font-medium text-slate-200 hover:text-white bg-white/[0.04] border border-white/[0.08] whitespace-nowrap"
+                    title="Select all files in natural serial order (1, 2, 3, ..., 10, 11...)"
                   >
-                    {validSelectedIds.length === mediaAssets.length ? 'Deselect All' : 'Select All'}
+                    {validSelectedIds.length === filteredMediaAssets.length &&
+                    filteredMediaAssets.length > 0
+                      ? 'Deselect All'
+                      : `Select All (${filteredMediaAssets.length})`}
                   </button>
-                  <span className="text-[11px] font-mono text-slate-500 whitespace-nowrap">
-                    {validSelectedIds.length} selected
-                  </span>
+                  {validSelectedIds.length > 0 && (
+                    <span className="text-[11px] font-mono text-sky-300 whitespace-nowrap">
+                      {validSelectedIds.length} sel
+                    </span>
+                  )}
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => onAddAssetsToTimeline(selectedAssetsOrdered)}
-                  className="glow-btn-prism px-2.5 py-1 text-[11px] font-semibold rounded text-white whitespace-nowrap shrink-0"
-                  title="Add selected files serially to timeline"
-                >
-                  Add ({selectedAssetsOrdered.length})
-                </button>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {onChangeDefaultImageDuration && (
+                    <label
+                      className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#07090F] border border-white/[0.1] text-[10px] text-slate-400"
+                      title="Default duration (seconds) for images added to timeline"
+                    >
+                      <span>Img</span>
+                      <input
+                        type="number"
+                        min={0.1}
+                        max={3600}
+                        step={0.1}
+                        value={isEditingImageDur ? imageDurDraft : String(defaultImageDuration)}
+                        onFocus={(e) => {
+                          setIsEditingImageDur(true);
+                          setImageDurDraft(String(defaultImageDuration));
+                          e.currentTarget.select();
+                        }}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          setImageDurDraft(raw);
+                          const parsed = parseFloat(raw);
+                          if (Number.isFinite(parsed) && parsed >= 0.1) {
+                            onChangeDefaultImageDuration(Number(clamp(parsed, 0.1, 3600).toFixed(2)));
+                          }
+                        }}
+                        onBlur={() => {
+                          const parsed = parseFloat(imageDurDraft);
+                          if (Number.isFinite(parsed) && parsed >= 0.1) {
+                            onChangeDefaultImageDuration(Number(clamp(parsed, 0.1, 3600).toFixed(2)));
+                          }
+                          setIsEditingImageDur(false);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') e.currentTarget.blur();
+                        }}
+                        className="w-10 bg-transparent text-right font-mono text-[10.5px] text-slate-100 focus:outline-none"
+                      />
+                      <span className="font-mono text-slate-500">s</span>
+                    </label>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onAddAssetsToTimeline(
+                        selectedAssetsOrdered.length > 0
+                          ? selectedAssetsOrdered
+                          : filteredMediaAssets
+                      )
+                    }
+                    className="glow-btn-prism px-2.5 py-1 text-[11px] font-semibold rounded text-white whitespace-nowrap shrink-0"
+                    title="Add selected (or all) files serially to timeline in natural 1, 2, 3... order"
+                  >
+                    {selectedAssetsOrdered.length > 0
+                      ? `Add (${selectedAssetsOrdered.length})`
+                      : `Add All (${filteredMediaAssets.length})`}
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -747,7 +867,7 @@ export function MediaBin({
               </div>
             ) : mediaViewMode === 'list' ? (
               <div className="space-y-2">
-                {filteredMediaAssets.map((asset) => {
+                {renderedMediaAssets.map((asset, idx) => {
                   const isSelected = selectedAssetSet.has(asset.id);
                   return (
                     <div
@@ -771,18 +891,20 @@ export function MediaBin({
                         e.dataTransfer.setData('application/x-framecut-asset', asset.id);
                         e.dataTransfer.effectAllowed = 'copy';
                       }}
-                      title="Right-click for file properties & duration settings"
+                      title={`${asset.name} — Right-click for file properties & duration settings`}
                       className={`glow-card group flex items-center gap-2.5 p-2 rounded-lg border cursor-grab active:cursor-grabbing ${
                         isSelected
                           ? 'bg-[#182338] border-sky-400/60 ring-1 ring-sky-400/30'
                           : 'bg-[#141822] hover:bg-[#1B212F] border-white/[0.06]'
                       }`}
                     >
-                      <div className="w-12 h-8 rounded bg-[#07090F] overflow-hidden shrink-0 flex items-center justify-center border border-white/[0.06]">
+                      <div className="relative w-12 h-8 rounded bg-[#07090F] overflow-hidden shrink-0 flex items-center justify-center border border-white/[0.06]">
                         {asset.thumbnailUrl ? (
                           <img
                             src={asset.thumbnailUrl}
                             alt={asset.name}
+                            loading="lazy"
+                            decoding="async"
                             referrerPolicy="no-referrer"
                             className="w-full h-full object-cover"
                           />
@@ -793,6 +915,9 @@ export function MediaBin({
                         ) : (
                           <ImageIcon className="w-4 h-4 text-amber-400" />
                         )}
+                        <span className="pointer-events-none absolute top-0.5 left-0.5 px-1 rounded bg-black/75 text-[9px] font-mono text-slate-200 leading-tight">
+                          #{idx + 1}
+                        </span>
                       </div>
 
                       <div className="min-w-0 flex-1">
@@ -802,7 +927,11 @@ export function MediaBin({
                         <div className="text-[11px] text-slate-500 font-mono tabular-nums flex items-center gap-1.5">
                           <span className="capitalize">{asset.type}</span>
                           <span aria-hidden="true">·</span>
-                          <span>{formatShortTime(asset.duration)}</span>
+                          <span>
+                            {formatShortTime(
+                              asset.type === 'image' ? defaultImageDuration : asset.duration
+                            )}
+                          </span>
                         </div>
                       </div>
 
@@ -820,7 +949,7 @@ export function MediaBin({
               </div>
             ) : (
               <div className="grid grid-cols-2 @[340px]:grid-cols-3 gap-2">
-                {filteredMediaAssets.map((asset) => {
+                {renderedMediaAssets.map((asset, idx) => {
                   const isSelected = selectedAssetSet.has(asset.id);
                   return (
                     <div
@@ -844,7 +973,7 @@ export function MediaBin({
                         e.dataTransfer.setData('application/x-framecut-asset', asset.id);
                         e.dataTransfer.effectAllowed = 'copy';
                       }}
-                      title="Right-click for file properties & duration settings"
+                      title={`${asset.name} — Right-click for file properties & duration settings`}
                       className={`glow-card group rounded-lg border overflow-hidden cursor-grab active:cursor-grabbing flex flex-col ${
                         isSelected
                           ? 'bg-[#182338] border-sky-400/60 ring-1 ring-sky-400/30'
@@ -856,6 +985,8 @@ export function MediaBin({
                           <img
                             src={asset.thumbnailUrl}
                             alt={asset.name}
+                            loading="lazy"
+                            decoding="async"
                             referrerPolicy="no-referrer"
                             className="w-full h-full object-cover"
                           />
@@ -867,8 +998,13 @@ export function MediaBin({
                           <ImageIcon className="w-5 h-5 text-amber-400" />
                         )}
                         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-7 bg-gradient-to-t from-black/80 via-black/35 to-transparent" />
+                        <span className="pointer-events-none absolute top-1 left-1 px-1 py-0.5 rounded bg-black/75 text-[9px] font-mono text-slate-200 leading-none">
+                          #{idx + 1}
+                        </span>
                         <span className="pointer-events-none absolute bottom-1 left-1.5 text-[10px] font-mono tabular-nums text-slate-200">
-                          {formatShortTime(asset.duration)}
+                          {formatShortTime(
+                            asset.type === 'image' ? defaultImageDuration : asset.duration
+                          )}
                         </span>
                         <button
                           type="button"
@@ -894,6 +1030,29 @@ export function MediaBin({
                     </div>
                   );
                 })}
+              </div>
+            )}
+            {filteredMediaAssets.length > renderedMediaAssets.length && (
+              <div className="mt-3 pt-2.5 border-t border-white/[0.08] flex flex-col items-center gap-1.5">
+                <div className="text-[11px] font-mono text-slate-400">
+                  Showing {renderedMediaAssets.length} of {filteredMediaAssets.length} files
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setVisibleMediaLimit((n) => n + 250)}
+                    className="glow-btn px-2.5 py-1 rounded-md text-[11px] font-medium text-sky-200 bg-sky-500/15 border border-sky-400/35 hover:bg-sky-500/25"
+                  >
+                    Load +250 More
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setVisibleMediaLimit(filteredMediaAssets.length)}
+                    className="glow-btn px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-300 bg-white/[0.05] border border-white/[0.1] hover:text-white"
+                  >
+                    Show All ({filteredMediaAssets.length})
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -952,79 +1111,203 @@ export function MediaBin({
                 <Type className="w-3.5 h-3.5 shrink-0" />
                 <span>Add Text (Advanced Settings)</span>
               </button>
+
+              <div className="grid grid-cols-3 gap-1 p-1 bg-[#07090F] rounded-lg border border-white/[0.06]">
+                {(['All', 'Titles', 'Lower Thirds'] as TitleCategoryFilter[]).map((cat) => (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => setTitleCategory(cat)}
+                    className={`glow-btn py-1 px-1 text-[10px] font-medium rounded border border-transparent whitespace-nowrap truncate ${
+                      titleCategory === cat
+                        ? 'bg-[#1A2130] text-sky-200'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center justify-between text-[11px] text-slate-400">
+                <span>Titles & Lower Thirds Library</span>
+                <span className="font-mono text-slate-500">
+                  {allTitleTemplates.length - pendingTitleTemplates.length}/{allTitleTemplates.length} saved
+                </span>
+              </div>
+
+              {pendingTitleTemplates.length > 0 && onDownloadAllTitleTemplates && (
+                <button
+                  type="button"
+                  onClick={() => void onDownloadAllTitleTemplates()}
+                  className="glow-btn w-full py-2 px-3 rounded-lg bg-gradient-to-r from-blue-600/20 via-purple-500/15 to-cyan-500/20 border border-sky-400/35 text-xs font-medium text-sky-100 flex items-center justify-center gap-2"
+                  title="Download & save all Title and Lower Third templates inside the app to reuse in every project"
+                >
+                  <Download className="w-3.5 h-3.5 text-sky-300" />
+                  <span>Download All Templates ({pendingTitleTemplates.length})</span>
+                </button>
+              )}
+
               <p className="text-[11px] text-slate-400">
-                Click any title template below to open advanced settings, or click + to insert directly.
+                Once downloaded inside the app, use any Title or Lower Third unlimited times across every project.
               </p>
-              {filteredTitleTemplates.map((tpl) => (
-                <div
-                  key={tpl.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() =>
-                    onOpenTextStudio
-                      ? onOpenTextStudio({
+
+              {filteredTitleTemplates.length === 0 ? (
+                <div className="py-8 text-center text-xs text-slate-500">
+                  No matching templates found.
+                </div>
+              ) : (
+                filteredTitleTemplates.map((tpl) => {
+                  const storageKey = makeTitleStorageKey(tpl.id);
+                  const isReady = Boolean(
+                    tpl.builtIn || tpl.isCustom || installedEffectSet.has(storageKey)
+                  );
+
+                  return (
+                    <div
+                      key={tpl.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => {
+                        if (!isReady) return;
+                        if (onOpenTextStudio) {
+                          onOpenTextStudio({
+                            name: tpl.name,
+                            x: tpl.x,
+                            y: tpl.y,
+                            duration: tpl.duration,
+                            config: tpl.config,
+                          });
+                        } else {
+                          onAddTitleTemplate(tpl.name, tpl.config, tpl.x, tpl.y, tpl.duration);
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if ((e.key === 'Enter' || e.key === ' ') && isReady) {
+                          e.preventDefault();
+                          if (onOpenTextStudio) {
+                            onOpenTextStudio({
+                              name: tpl.name,
+                              x: tpl.x,
+                              y: tpl.y,
+                              duration: tpl.duration,
+                              config: tpl.config,
+                            });
+                          } else {
+                            onAddTitleTemplate(tpl.name, tpl.config, tpl.x, tpl.y, tpl.duration);
+                          }
+                        }
+                      }}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onOpenProperties({
+                          kind: 'title-template',
+                          id: tpl.id,
                           name: tpl.name,
+                          subtitle: tpl.subtitle,
                           x: tpl.x,
                           y: tpl.y,
-                          duration: 3.0,
-                          config: tpl.config,
-                        })
-                      : onAddTitleTemplate(tpl.name, tpl.config, tpl.x, tpl.y)
-                  }
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      if (onOpenTextStudio) {
-                        onOpenTextStudio({
-                          name: tpl.name,
-                          x: tpl.x,
-                          y: tpl.y,
-                          duration: 3.0,
                           config: tpl.config,
                         });
-                      } else {
-                        onAddTitleTemplate(tpl.name, tpl.config, tpl.x, tpl.y);
+                      }}
+                      title={
+                        isReady
+                          ? 'Click to customize in Text Studio or + to insert anytime'
+                          : 'Click Download & Save to keep permanently in your app library'
                       }
-                    }
-                  }}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onOpenProperties({
-                      kind: 'title-template',
-                      id: tpl.id,
-                      name: tpl.name,
-                      subtitle: tpl.subtitle,
-                      x: tpl.x,
-                      y: tpl.y,
-                      config: tpl.config,
-                    });
-                  }}
-                  title="Click for advanced text settings popup"
-                  className="glow-card w-full text-left p-2.5 rounded-lg bg-[#141822] hover:bg-[#1B212F] border border-white/[0.06] flex items-center justify-between gap-2 group cursor-pointer"
-                >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 text-xs font-semibold text-slate-200">
-                      <Type className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                      <span className="truncate">{tpl.name}</span>
+                      className={`glow-card w-full text-left p-2.5 rounded-lg bg-[#141822] hover:bg-[#1B212F] border border-white/[0.06] space-y-2 ${
+                        isReady ? 'cursor-pointer' : ''
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-200">
+                            <Type
+                              className={`w-3.5 h-3.5 shrink-0 ${
+                                tpl.category === 'Lower Thirds' ? 'text-amber-300' : 'text-sky-400'
+                              }`}
+                            />
+                            <span className="truncate">{tpl.name}</span>
+                            {!tpl.builtIn && !tpl.isCustom && isReady && (
+                              <Check className="w-3 h-3 text-emerald-400 shrink-0" />
+                            )}
+                            {tpl.isCustom && (
+                              <span className="px-1 py-0.5 rounded bg-purple-500/20 text-[9px] text-purple-200 shrink-0">
+                                Saved
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-500 mt-0.5 truncate">
+                            {tpl.category} · {tpl.subtitle}
+                          </div>
+                        </div>
+
+                        {isReady && (
+                          <div className="flex items-center gap-1 shrink-0">
+                            {onSaveCustomTitleTemplate && !tpl.isCustom && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onSaveCustomTitleTemplate({
+                                    ...tpl,
+                                    id: uid('custom_tpl'),
+                                    builtIn: true,
+                                    isCustom: true,
+                                  });
+                                }}
+                                title="Save duplicate copy in Library"
+                                className="glow-btn w-6 h-6 rounded bg-white/[0.05] hover:bg-purple-500/20 text-purple-300 border border-transparent flex items-center justify-center"
+                              >
+                                <BookmarkPlus className="w-3 h-3" />
+                              </button>
+                            )}
+                            {tpl.isCustom && onDeleteCustomTitleTemplate && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onDeleteCustomTitleTemplate(tpl.id);
+                                }}
+                                title="Remove saved template"
+                                className="glow-btn w-6 h-6 rounded bg-white/[0.04] hover:bg-rose-500/25 text-slate-400 hover:text-rose-200 border border-transparent flex items-center justify-center"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onAddTitleTemplate(tpl.name, tpl.config, tpl.x, tpl.y, tpl.duration);
+                              }}
+                              title="Use template at playhead"
+                              className="glow-btn w-6 h-6 rounded bg-sky-500/20 hover:bg-sky-500/35 text-sky-200 hover:text-white border border-sky-400/35 flex items-center justify-center"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {!isReady && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void onDownloadEffectItem(storageKey, tpl.name);
+                          }}
+                          className="glow-btn w-full py-1.5 px-2.5 text-[11px] font-medium rounded bg-[#07090F] text-slate-200 hover:text-white border border-white/[0.1] flex items-center justify-center gap-1.5"
+                        >
+                          <Download className="w-3 h-3 text-sky-300" />
+                          <span>Download & Save (Use Anytime)</span>
+                        </button>
+                      )}
                     </div>
-                    <div className="text-[11px] text-slate-500 mt-0.5 truncate">
-                      {tpl.subtitle}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onAddTitleTemplate(tpl.name, tpl.config, tpl.x, tpl.y);
-                    }}
-                    title="Quick insert at playhead"
-                    className="glow-btn w-7 h-7 rounded-md bg-white/[0.05] hover:bg-sky-500/20 text-slate-400 hover:text-white border border-transparent flex items-center justify-center shrink-0"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              ))}
+                  );
+                })
+              )}
 
               <div className="pt-3 border-t border-white/[0.08] space-y-2">
                 <div className="flex items-center justify-between">
@@ -1249,6 +1532,114 @@ export function MediaBin({
                   </div>
                 ))}
               </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {tab === 'sfx' && (
+        <div className="flex-1 flex flex-col min-h-0">
+          <div className="p-3 border-b border-white/[0.08] space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-slate-200 flex items-center gap-1.5">
+                <Volume2 className="w-3.5 h-3.5 text-emerald-300" />
+                <span>Sound VFX Library</span>
+              </span>
+              <span className="text-[11px] font-mono text-slate-400">
+                {filteredSfxCatalog.length} sounds
+              </span>
+            </div>
+
+            <SectionSearchBar
+              value={sfxQuery}
+              onChange={setSfxQuery}
+              placeholder="Search SFX (click, drop, typing, whoosh)..."
+            />
+
+            <div className="flex items-center gap-1 overflow-x-auto studio-scroll-thin pb-0.5">
+              {(
+                ['All', 'UI & Typing', 'Drops & Whoosh', 'Social & Creator', 'Cinematic'] as SfxCategoryFilter[]
+              ).map((cat) => (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => setSfxCategory(cat)}
+                  className={`glow-btn px-2 py-1 text-[10px] font-medium rounded-md border whitespace-nowrap shrink-0 ${
+                    sfxCategory === cat
+                      ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-200'
+                      : 'bg-[#07090F] border-white/[0.07] text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto studio-scroll p-3 space-y-2">
+            {filteredSfxCatalog.length === 0 ? (
+              <div className="py-10 text-center text-xs text-slate-500">
+                No matching Sound VFX found.
+              </div>
+            ) : (
+              filteredSfxCatalog.map((sfx) => {
+                const isPlaying = playingSfxId === sfx.id;
+                return (
+                  <div
+                    key={sfx.id}
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData('application/x-framecut-sfx', sfx.id);
+                      e.dataTransfer.effectAllowed = 'copy';
+                    }}
+                    title={`${sfx.description} — Drag onto audio track or click + Add`}
+                    className="glow-card p-2.5 rounded-lg bg-[#141822] hover:bg-[#1B212F] border border-white/[0.06] hover:border-emerald-400/40 flex items-center gap-2.5 cursor-grab active:cursor-grabbing"
+                  >
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleToggleSfxPreview(sfx);
+                      }}
+                      title={isPlaying ? 'Stop preview' : 'Preview sound'}
+                      className={`glow-btn w-7 h-7 rounded-md border flex items-center justify-center shrink-0 ${
+                        isPlaying
+                          ? 'bg-emerald-500/25 border-emerald-400/50 text-emerald-200'
+                          : 'bg-[#07090F] border-white/[0.1] text-slate-300 hover:text-white'
+                      }`}
+                    >
+                      {isPlaying ? <Square className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+                    </button>
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-xs font-semibold text-slate-200 truncate">
+                          {sfx.label}
+                        </span>
+                        <span className="text-[10px] font-mono text-emerald-300 shrink-0">
+                          {sfx.duration.toFixed(1)}s
+                        </span>
+                      </div>
+                      <div className="text-[10.5px] text-slate-500 truncate mt-0.5">
+                        {sfx.category} · {sfx.description}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onAddSfxToTimeline?.(sfx.id);
+                      }}
+                      title="Add Sound VFX at playhead"
+                      className="glow-btn px-2 h-7 rounded-md bg-emerald-500/18 hover:bg-emerald-500/30 border border-emerald-400/40 text-[11px] font-semibold text-emerald-100 flex items-center gap-1 shrink-0"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>Add</span>
+                    </button>
+                  </div>
+                );
+              })
             )}
           </div>
         </div>
@@ -1997,9 +2388,8 @@ export function MediaBin({
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-400">
-                    {hasSelectedClip
-                      ? 'Click In or Out to apply, or drag onto any clip.'
-                      : 'Select a clip first, or download packs to save permanently.'}
+                    Click <span className="text-sky-300 font-semibold">+ Add</span> to auto-add on timeline seam/clip,{' '}
+                    <span className="text-slate-200 font-medium">Apply All</span> for every clip, or drag onto timeline.
                   </p>
                   {pendingTransitions.length > 0 && (
                     <button
@@ -2036,7 +2426,7 @@ export function MediaBin({
                             e.dataTransfer.setData('application/x-framecut-transition', preset.id);
                             e.dataTransfer.effectAllowed = 'copy';
                           }}
-                          title="Right-click for transition duration & edge settings"
+                          title="Click + to add to timeline, or drag onto any clip/seam (Right-click for duration settings)"
                           className={`glow-card p-2.5 rounded-lg bg-[#141822] border border-white/[0.06] space-y-2 ${
                             isReady ? 'cursor-grab active:cursor-grabbing' : ''
                           }`}
@@ -2053,19 +2443,35 @@ export function MediaBin({
                                 {preset.category} · {preset.description}
                               </div>
                             </div>
+                            {isReady && (
+                              <button
+                                type="button"
+                                disabled={!hasRenderableClips}
+                                onClick={() =>
+                                  onQuickAddTransition
+                                    ? onQuickAddTransition(preset.id, preset.defaultDuration)
+                                    : onApplyTransition(preset.id, 'in', preset.defaultDuration)
+                                }
+                                title="Auto-add transition to timeline (+)"
+                                className="glow-btn shrink-0 flex items-center gap-1 px-2 py-1 rounded-md bg-sky-500/20 hover:bg-sky-500/35 border border-sky-400/45 text-[11px] font-semibold text-sky-100 disabled:opacity-40 disabled:pointer-events-none"
+                              >
+                                <Plus className="w-3 h-3" />
+                                <span>Add</span>
+                              </button>
+                            )}
                           </div>
 
                           {isReady ? (
-                            <div className="grid grid-cols-2 gap-1.5">
+                            <div className="grid grid-cols-3 gap-1.5">
                               <button
                                 type="button"
                                 disabled={!hasSelectedClip}
                                 onClick={() =>
                                   onApplyTransition(preset.id, 'in', preset.defaultDuration)
                                 }
-                                className="glow-btn py-1 px-2 text-[11px] font-medium rounded bg-[#07090F] text-slate-300 hover:text-white border border-white/[0.08] disabled:opacity-40 disabled:pointer-events-none"
+                                className="glow-btn py-1 px-1.5 text-[11px] font-medium rounded bg-[#07090F] text-slate-300 hover:text-white border border-white/[0.08] disabled:opacity-40 disabled:pointer-events-none"
                               >
-                                Apply In
+                                In
                               </button>
                               <button
                                 type="button"
@@ -2073,9 +2479,20 @@ export function MediaBin({
                                 onClick={() =>
                                   onApplyTransition(preset.id, 'out', preset.defaultDuration)
                                 }
-                                className="glow-btn py-1 px-2 text-[11px] font-medium rounded bg-[#07090F] text-slate-300 hover:text-white border border-white/[0.08] disabled:opacity-40 disabled:pointer-events-none"
+                                className="glow-btn py-1 px-1.5 text-[11px] font-medium rounded bg-[#07090F] text-slate-300 hover:text-white border border-white/[0.08] disabled:opacity-40 disabled:pointer-events-none"
                               >
-                                Apply Out
+                                Out
+                              </button>
+                              <button
+                                type="button"
+                                disabled={!hasRenderableClips}
+                                onClick={() =>
+                                  onApplyTransitionToAll?.(preset.id, preset.defaultDuration)
+                                }
+                                title="Apply this transition between all clips on timeline"
+                                className="glow-btn py-1 px-1.5 text-[11px] font-medium rounded bg-sky-500/15 hover:bg-sky-500/25 text-sky-200 hover:text-white border border-sky-400/30 disabled:opacity-40 disabled:pointer-events-none"
+                              >
+                                Apply All
                               </button>
                             </div>
                           ) : (

@@ -17,6 +17,8 @@ interface TopBarProps {
   onSaveProjectAs: () => void;
   isProjectSavedFlash?: boolean;
   savedFileName?: string | null;
+  savedFolderPath?: string | null;
+  lastAutoSavedAt?: number | null;
   hasSavedOnce?: boolean;
   onOpenExport: () => void;
   hasClips: boolean;
@@ -40,12 +42,24 @@ export function TopBar({
   onSaveProjectAs,
   isProjectSavedFlash = false,
   savedFileName = null,
+  savedFolderPath = null,
+  lastAutoSavedAt = null,
   hasSavedOnce = false,
   onOpenExport,
   hasClips,
   hasContent = hasClips,
   onOpenProperties,
 }: TopBarProps) {
+  const autoSaveTimeLabel = lastAutoSavedAt
+    ? new Date(lastAutoSavedAt).toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      })
+    : null;
+  const fullSavedLocation = savedFolderPath && savedFileName
+    ? `${savedFolderPath}/${savedFileName}`
+    : savedFileName || savedFolderPath || '';
   return (
     <header className="min-h-13 h-auto shrink-0 studio-panel border-b border-white/[0.08] px-2.5 sm:px-4 lg:px-5 py-1.5 flex flex-wrap md:flex-nowrap items-center justify-between gap-2 sm:gap-3 lg:gap-5">
       {/* Zone 1: Home Return + Brand Wordmark */}
@@ -196,14 +210,14 @@ export function TopBar({
             }`}
             title={
               hasSavedOnce
-                ? `Save directly${savedFileName ? ` to ${savedFileName}` : ''} (auto-saves on every movement · Ctrl/Cmd+S)`
-                : 'Choose file location & save project (Ctrl/Cmd+S)'
+                ? `Save directly${fullSavedLocation ? ` to ${fullSavedLocation}` : ''} · 30s Auto-Save active${autoSaveTimeLabel ? ` (Last saved ${autoSaveTimeLabel})` : ''} · Ctrl/Cmd+S`
+                : 'Choose folder & file location to save project (Ctrl/Cmd+S)'
             }
           >
             {isProjectSavedFlash ? (
               <>
                 <Check className="w-3.5 h-3.5" />
-                <span>Saved</span>
+                <span>Auto-Saved</span>
               </>
             ) : (
               <>
@@ -211,6 +225,11 @@ export function TopBar({
                 <span>
                   Save<span className="hidden md:inline"> Project</span>
                 </span>
+                {hasSavedOnce && autoSaveTimeLabel && (
+                  <span className="hidden xl:inline text-[10px] font-mono text-emerald-300/85 border-l border-white/[0.12] pl-1.5">
+                    30s · {autoSaveTimeLabel}
+                  </span>
+                )}
               </>
             )}
           </button>
@@ -225,14 +244,24 @@ export function TopBar({
                 onOpenProperties({
                   kind: 'tool',
                   toolId: 'save-project',
-                  title: 'Save Project As New File',
-                  description: 'Pick a new project file location and sync auto-save to it.',
+                  title: 'Linked Project Folder & Save As',
+                  description:
+                    'Change the linked project folder in Local Storage or save a new project file location.',
                 });
               }}
-              className="glow-btn p-1.5 sm:p-2 text-slate-300 hover:text-white bg-[#141822] border border-white/[0.1] rounded-lg shrink-0"
-              title="Choose a new save file location (Save As)"
+              className="glow-btn flex items-center gap-1.5 p-1.5 sm:px-2.5 sm:py-2 text-slate-300 hover:text-white bg-[#141822] border border-white/[0.1] rounded-lg shrink-0"
+              title={
+                savedFolderPath
+                  ? `Linked Folder: ${savedFolderPath} (Synced with Local Storage) · Click to change folder (Save As)`
+                  : 'Choose a new save folder location (Save As)'
+              }
             >
-              <FolderOutput className="w-3.5 h-3.5" />
+              <FolderOutput className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+              {savedFolderPath && (
+                <span className="hidden xl:inline text-[11px] font-mono text-sky-200/90 max-w-[130px] truncate">
+                  {savedFolderPath}
+                </span>
+              )}
             </button>
           )}
         </div>

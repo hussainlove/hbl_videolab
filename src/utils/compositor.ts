@@ -814,6 +814,38 @@ function computeClipAnimationEffect(
         res.rotateRad += localTime * Math.PI * 0.45 * intensity;
         break;
       }
+      case 'pan-horizontal': {
+        const overscan = 1 + 0.14 * intensity;
+        res.scaleX *= overscan;
+        res.scaleY *= overscan;
+        res.offsetX += Math.sin(localTime * 1.15) * width * 0.065 * intensity;
+        break;
+      }
+      case 'pan-vertical': {
+        const overscan = 1 + 0.14 * intensity;
+        res.scaleX *= overscan;
+        res.scaleY *= overscan;
+        res.offsetY += Math.sin(localTime * 1.15) * height * 0.065 * intensity;
+        break;
+      }
+      case 'pan-diagonal': {
+        const overscan = 1 + 0.16 * intensity;
+        res.scaleX *= overscan;
+        res.scaleY *= overscan;
+        const wave = Math.sin(localTime * 1.05);
+        res.offsetX += wave * width * 0.055 * intensity;
+        res.offsetY += wave * height * 0.055 * intensity;
+        break;
+      }
+      case 'pan-ken-loop': {
+        const zoomWave = 0.5 + 0.5 * Math.sin(localTime * 0.9);
+        const s = 1 + (0.12 + 0.08 * zoomWave) * intensity;
+        res.scaleX *= s;
+        res.scaleY *= s;
+        res.offsetX += Math.sin(localTime * 0.85) * width * 0.052 * intensity;
+        res.offsetY += Math.sin(localTime * 1.7) * height * 0.036 * intensity;
+        break;
+      }
     }
   }
 
@@ -1892,7 +1924,8 @@ export function renderFrameToContext(
     let kbScale = 1;
     let kbPanX = 0;
     let kbPanY = 0;
-    const eased = easeInOutSine(progress);
+    const eased =
+      clip.panZoomEasing === 'linear' ? progress : easeInOutSine(progress);
 
     if (clip.kenBurns === 'zoom-in') {
       kbScale = 1 + 0.12 * eased;
@@ -1904,6 +1937,18 @@ export function renderFrameToContext(
     } else if (clip.kenBurns === 'pan-right') {
       kbScale = 1.1;
       kbPanX = (-0.04 + 0.08 * eased) * width;
+    } else if (clip.kenBurns === 'pan-zoom' && (!clip.keyframes || clip.keyframes.length < 2)) {
+      const startS = clamp(clip.panZoomStartScale ?? 100, 10, 600);
+      const endS = clamp(clip.panZoomEndScale ?? 122, 10, 600);
+      const startX = clip.panZoomStartX ?? 0;
+      const startY = clip.panZoomStartY ?? 0;
+      const endX = clip.panZoomEndX ?? 0;
+      const endY = clip.panZoomEndY ?? 0;
+      const baseSafeScale = Math.max(10, evalT.scale || 100);
+      const interpS = startS + (endS - startS) * eased;
+      kbScale = interpS / baseSafeScale;
+      kbPanX = (((startX + (endX - startX) * eased) - evalT.x) / 100) * width;
+      kbPanY = (((startY + (endY - startY) * eased) - evalT.y) / 100) * height;
     }
 
     const drawW = srcW * baseScale * userScale * kbScale;
@@ -2692,7 +2737,7 @@ export function renderFrameToContext(
         (p) =>
           p.id !== clip.id &&
           p.track === clip.track &&
-          Math.abs(p.startTime + p.duration - clip.startTime) <= 0.08
+          Math.abs(p.startTime + p.duration - clip.startTime) <= 0.12
       );
       if (prevClip) {
         drawSingleVisual(
@@ -2700,6 +2745,23 @@ export function renderFrameToContext(
           Math.max(prevClip.startTime, prevClip.startTime + prevClip.duration - 0.02),
           false
         );
+      }
+    } else if (clip.transitionOut && clip.transitionOut !== 'none') {
+      const durOut = clamp(
+        clip.transitionOutDuration ?? 0.5,
+        0.05,
+        Math.max(0.05, clip.duration * 0.85)
+      );
+      if (clip.duration - localTime < durOut) {
+        const nextClip = allVisuals.find(
+          (n) =>
+            n.id !== clip.id &&
+            n.track === clip.track &&
+            Math.abs(clip.startTime + clip.duration - n.startTime) <= 0.12
+        );
+        if (nextClip) {
+          drawSingleVisual(nextClip, nextClip.startTime + 0.02, false);
+        }
       }
     }
 

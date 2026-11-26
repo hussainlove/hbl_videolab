@@ -3,9 +3,11 @@ import {
   AlignCenter,
   AlignLeft,
   AlignRight,
+  BookmarkPlus,
   Check,
   Layers,
   Plus,
+  Search,
   Sparkles,
   Type,
   X,
@@ -20,10 +22,12 @@ import {
   TextAnimation,
   TextConfig,
   TimelineClip,
+  TITLE_AND_LOWER_THIRD_TEMPLATES,
+  TitleTemplateItem,
   TrackId,
 } from '../types/editor';
 import { detectTextLanguage, ensureScriptFontLoaded } from '../utils/languageSupport';
-import { clamp, formatShortTime } from '../utils/time';
+import { clamp, formatShortTime, uid } from '../utils/time';
 
 export interface TextPresetSeed {
   name: string;
@@ -54,75 +58,13 @@ export const TEXT_STUDIO_PRESETS: TextPresetSeed[] = [
       textDirection: 'auto',
     },
   },
-  {
-    name: 'Center Headline',
-    x: 0,
-    y: 0,
-    duration: 3.0,
-    config: {
-      text: 'Main Sequence Title',
-      fontFamily: 'Plus Jakarta Sans',
-      fontSize: 68,
-      fontWeight: 700,
-      color: '#FFFFFF',
-      align: 'center',
-      hasScrim: false,
-      scrimOpacity: 60,
-      animation: 'slide-up',
-    },
-  },
-  {
-    name: 'Lower Third',
-    x: -36,
-    y: 34,
-    duration: 4.0,
-    config: {
-      text: 'Location  ·  04:20 PM',
-      fontFamily: 'JetBrains Mono',
-      fontSize: 30,
-      fontWeight: 500,
-      color: '#F8FAFC',
-      align: 'left',
-      hasScrim: true,
-      scrimOpacity: 74,
-      captionBgColor: '#090B10',
-      animation: 'fade',
-    },
-  },
-  {
-    name: 'Editorial Serif',
-    x: 0,
-    y: -4,
-    duration: 3.5,
-    config: {
-      text: 'Chapter One\nQuiet Horizon',
-      fontFamily: 'Playfair Display',
-      fontSize: 64,
-      fontWeight: 600,
-      color: '#FFFBEB',
-      align: 'center',
-      hasScrim: false,
-      scrimOpacity: 50,
-      animation: 'scale',
-    },
-  },
-  {
-    name: 'Condensed Impact',
-    x: 0,
-    y: 0,
-    duration: 2.5,
-    config: {
-      text: 'BUILT FOR SPEED',
-      fontFamily: 'Oswald',
-      fontSize: 78,
-      fontWeight: 700,
-      color: '#FFFFFF',
-      align: 'center',
-      hasScrim: true,
-      scrimOpacity: 55,
-      animation: 'scale',
-    },
-  },
+  ...TITLE_AND_LOWER_THIRD_TEMPLATES.map((t) => ({
+    name: t.name,
+    x: t.x,
+    y: t.y,
+    duration: t.duration,
+    config: t.config,
+  })),
 ];
 
 interface TextStudioModalProps {
@@ -157,9 +99,43 @@ interface TextStudioModalProps {
   }) => void;
   onUpdateSelectedTextClip: (id: string, patch: Partial<TimelineClip>) => void;
   onRescaleAllText?: (scale: number, fontSize?: number) => void;
+  onSaveAsTemplate?: (tpl: TitleTemplateItem) => void;
 }
 
 const TEXT_SWATCHES = ['#FFFFFF', '#F8FAFC', '#FDE68A', '#38BDF8', '#A855F7', '#F43F5E', '#111827'];
+
+function TextSearchInput({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <div className="relative">
+      <Search className="w-3 h-3 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full pl-7 pr-6 py-1 text-[11px] text-slate-100 bg-[#07090F] border border-white/[0.09] rounded-md focus:outline-none focus:border-sky-400 placeholder:text-slate-500"
+      />
+      {value && (
+        <button
+          type="button"
+          onClick={() => onChange('')}
+          className="glow-btn absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-slate-400 hover:text-white border border-transparent"
+          title="Clear search"
+        >
+          <X className="w-3 h-3" />
+        </button>
+      )}
+    </div>
+  );
+}
 
 function TextSlider({
   label,
@@ -256,6 +232,7 @@ export function TextStudioModal({
   onInsertAdvancedText,
   onUpdateSelectedTextClip,
   onRescaleAllText,
+  onSaveAsTemplate,
 }: TextStudioModalProps) {
   const [clipName, setClipName] = useState('Title Overlay');
   const [config, setConfig] = useState<TextConfig>(TEXT_STUDIO_PRESETS[0].config);
@@ -276,9 +253,15 @@ export function TextStudioModal({
   const [animationOutDuration, setAnimationOutDuration] = useState(0.5);
   const [animationCombo, setAnimationCombo] = useState<ClipAnimationPreset>('none');
   const [preferredTrack, setPreferredTrack] = useState<string>('auto');
+  const [studioSearch, setStudioSearch] = useState('');
+  const [fontSearch, setFontSearch] = useState('');
+  const [animSearch, setAnimSearch] = useState('');
 
   useEffect(() => {
     if (!isOpen) return;
+    setStudioSearch('');
+    setFontSearch('');
+    setAnimSearch('');
     const seed = initialSeed ?? TEXT_STUDIO_PRESETS[0];
     setClipName(seed.name);
     setConfig({
@@ -329,9 +312,26 @@ export function TextStudioModal({
       ? 'ltr'
       : detectedLang?.direction ?? 'ltr';
   const outlinePx = config.captionOutlineWidth ?? 0;
-  const inPresets = ANIMATION_PRESETS.filter((a) => a.category === 'In');
-  const outPresets = ANIMATION_PRESETS.filter((a) => a.category === 'Out');
-  const comboPresets = ANIMATION_PRESETS.filter((a) => a.category === 'Combo');
+  const studioNeedle = studioSearch.trim().toLowerCase();
+  const showStudioSection = (keywords: string) =>
+    !studioNeedle || keywords.toLowerCase().includes(studioNeedle);
+  const fontNeedle = fontSearch.trim().toLowerCase();
+  const animNeedle = animSearch.trim().toLowerCase();
+  const inPresets = ANIMATION_PRESETS.filter(
+    (a) =>
+      a.category === 'In' &&
+      (a.id === animationIn || !animNeedle || a.label.toLowerCase().includes(animNeedle))
+  );
+  const outPresets = ANIMATION_PRESETS.filter(
+    (a) =>
+      a.category === 'Out' &&
+      (a.id === animationOut || !animNeedle || a.label.toLowerCase().includes(animNeedle))
+  );
+  const comboPresets = ANIMATION_PRESETS.filter(
+    (a) =>
+      a.category === 'Combo' &&
+      (a.id === animationCombo || !animNeedle || a.label.toLowerCase().includes(animNeedle))
+  );
   const hasSelectedTitle = Boolean(
     selectedTextClip && isTitleTrack(selectedTextClip.track) && selectedTextClip.textConfig
   );
@@ -462,41 +462,53 @@ export function TextStudioModal({
               </div>
             </div>
 
-            {/* Template Picker Strip */}
-            <div className="flex items-center gap-1.5 overflow-x-auto studio-scroll-thin pb-1">
-              <span className="text-[11px] text-slate-400 shrink-0 mr-1">Templates:</span>
-              {TEXT_STUDIO_PRESETS.map((preset) => (
-                <button
-                  key={preset.name}
-                  type="button"
-                  onClick={() => {
-                    setClipName(preset.name);
-                    setConfig({
-                      captionOutlineWidth: 0,
-                      captionOutlineColor: '#050608',
-                      captionBgColor: '#090B10',
-                      textDirection: 'auto',
-                      ...preset.config,
-                    });
-                    setPosX(preset.x);
-                    setPosY(preset.y);
-                    if (preset.duration) setDuration(preset.duration);
-                  }}
-                  className={`glow-btn px-2.5 py-1 rounded-md border text-[11px] font-medium whitespace-nowrap shrink-0 ${
-                    clipName === preset.name
-                      ? 'bg-[#182338] border-sky-400/50 text-sky-200'
-                      : 'bg-[#141822] hover:bg-[#1B212F] border-white/[0.08] text-slate-300'
-                  }`}
-                >
-                  {preset.name}
-                </button>
-              ))}
+            {/* Template Picker Strip + Studio Settings Search */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 overflow-x-auto studio-scroll-thin pb-1 flex-1 min-w-0">
+                <span className="text-[11px] text-slate-400 shrink-0 mr-1">Templates:</span>
+                {TEXT_STUDIO_PRESETS.filter(
+                  (preset) => !studioNeedle || preset.name.toLowerCase().includes(studioNeedle)
+                ).map((preset) => (
+                  <button
+                    key={preset.name}
+                    type="button"
+                    onClick={() => {
+                      setClipName(preset.name);
+                      setConfig({
+                        captionOutlineWidth: 0,
+                        captionOutlineColor: '#050608',
+                        captionBgColor: '#090B10',
+                        textDirection: 'auto',
+                        ...preset.config,
+                      });
+                      setPosX(preset.x);
+                      setPosY(preset.y);
+                      if (preset.duration) setDuration(preset.duration);
+                    }}
+                    className={`glow-btn px-2.5 py-1 rounded-md border text-[11px] font-medium whitespace-nowrap shrink-0 ${
+                      clipName === preset.name
+                        ? 'bg-[#182338] border-sky-400/50 text-sky-200'
+                        : 'bg-[#141822] hover:bg-[#1B212F] border-white/[0.08] text-slate-300'
+                    }`}
+                  >
+                    {preset.name}
+                  </button>
+                ))}
+              </div>
+              <div className="w-full sm:w-56 shrink-0">
+                <TextSearchInput
+                  value={studioSearch}
+                  onChange={setStudioSearch}
+                  placeholder="Search text settings (pan, glow, font)..."
+                />
+              </div>
             </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* LEFT COLUMN: Content, Manual Duration & Timing, Position & Transform */}
             <div className="space-y-4">
+              {showStudioSection('text content clip label overlay copy') && (
               <div className="p-3.5 rounded-xl bg-[#090C13] border border-white/[0.08] space-y-3">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-slate-200">Text Content</span>
@@ -535,8 +547,10 @@ export function TextStudioModal({
                   />
                 </div>
               </div>
+              )}
 
               {/* Manual Timing & Track Target */}
+              {showStudioSection('timing track placement manual duration start time fade in fade out') && (
               <div className="p-3.5 rounded-xl bg-[#090C13] border border-white/[0.08] space-y-3">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
@@ -610,8 +624,10 @@ export function TextStudioModal({
                   </select>
                 </div>
               </div>
+              )}
 
               {/* Position & Transform */}
+              {showStudioSection('position transform x y scale rotation opacity rescale all text') && (
               <div className="p-3.5 rounded-xl bg-[#090C13] border border-white/[0.08] space-y-3">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-slate-200">
@@ -697,11 +713,13 @@ export function TextStudioModal({
                   </button>
                 )}
               </div>
+              )}
             </div>
 
             {/* RIGHT COLUMN: Typography, Colors, Outline, Backdrop, Glow & Animations */}
             <div className="space-y-4">
               {/* Typography */}
+              {showStudioSection('typography language script font family weight align direction rtl ltr font size all caps backdrop scrim') && (
               <div className="p-3.5 rounded-xl bg-[#090C13] border border-white/[0.08] space-y-3">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-slate-200">
@@ -717,6 +735,12 @@ export function TextStudioModal({
                   </button>
                 </div>
 
+                <TextSearchInput
+                  value={fontSearch}
+                  onChange={setFontSearch}
+                  placeholder="Search fonts..."
+                />
+
                 <div className="grid grid-cols-2 gap-2.5">
                   <div className="space-y-1">
                     <label className="block text-[11px] text-slate-400">Font Family</label>
@@ -725,12 +749,24 @@ export function TextStudioModal({
                       onChange={(e) => setConfig({ ...config, fontFamily: e.target.value })}
                       className="w-full px-2.5 py-1.5 text-xs text-slate-100 bg-[#07090F] border border-white/[0.1] rounded-lg"
                     >
-                      {customFonts.map((f) => (
-                        <option key={f.id} value={f.family}>
-                          {f.family}
-                        </option>
-                      ))}
-                      {BUILTIN_FONT_FAMILIES.map((f) => (
+                      {customFonts
+                        .filter(
+                          (f) =>
+                            f.family === config.fontFamily ||
+                            !fontNeedle ||
+                            f.family.toLowerCase().includes(fontNeedle)
+                        )
+                        .map((f) => (
+                          <option key={f.id} value={f.family}>
+                            {f.family}
+                          </option>
+                        ))}
+                      {BUILTIN_FONT_FAMILIES.filter(
+                        (f) =>
+                          f === config.fontFamily ||
+                          !fontNeedle ||
+                          f.toLowerCase().includes(fontNeedle)
+                      ).map((f) => (
                         <option key={f} value={f}>
                           {f}
                         </option>
@@ -837,8 +873,10 @@ export function TextStudioModal({
                   </label>
                 </div>
               </div>
+              )}
 
               {/* Colors, Outline, Backdrop & Glow */}
+              {showStudioSection('color outline backdrop glow thickness neon intensity opacity') && (
               <div className="p-3.5 rounded-xl bg-[#090C13] border border-white/[0.08] space-y-3">
                 <div className="text-xs font-semibold text-slate-200">
                   Color, Outline, Backdrop &amp; Glow
@@ -944,12 +982,19 @@ export function TextStudioModal({
                   </div>
                 )}
               </div>
+              )}
 
               {/* Animations */}
+              {showStudioSection('animations entrance exit loop combo pan zoom bounce spin title motion') && (
               <div className="p-3.5 rounded-xl bg-[#090C13] border border-white/[0.08] space-y-2.5">
                 <div className="text-xs font-semibold text-slate-200">
                   Entrance, Exit &amp; Loop Animations
                 </div>
+                <TextSearchInput
+                  value={animSearch}
+                  onChange={setAnimSearch}
+                  placeholder="Search animations (pan, bounce, pulse, spin)..."
+                />
                 <div className="grid grid-cols-2 gap-2.5">
                   <div className="space-y-1">
                     <label className="block text-[11px] text-slate-400">Title Motion</label>
@@ -1039,21 +1084,49 @@ export function TextStudioModal({
                   </div>
                 )}
               </div>
+              )}
             </div>
           </div>
         </div>
 
         {/* Footer Actions */}
         <div className="px-4 sm:px-5 py-3 border-t border-white/[0.08] bg-[#0B0E16] flex flex-wrap items-center justify-between gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={onClose}
-            className="glow-btn px-3.5 py-2 text-xs font-medium text-slate-300 hover:text-white bg-[#141822] border border-white/[0.08] rounded-lg"
-          >
-            Cancel
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="glow-btn px-3.5 py-2 text-xs font-medium text-slate-300 hover:text-white bg-[#141822] border border-white/[0.08] rounded-lg"
+            >
+              Cancel
+            </button>
+            {onSaveAsTemplate && (
+              <button
+                type="button"
+                onClick={() => {
+                  const isLower = posY >= 15 || clipName.toLowerCase().includes('lower');
+                  onSaveAsTemplate({
+                    id: uid('custom_tpl'),
+                    name: clipName.trim() || 'Saved Title',
+                    subtitle: `${config.fontFamily} · Saved in Library`,
+                    category: isLower ? 'Lower Thirds' : 'Titles',
+                    x: posX,
+                    y: posY,
+                    duration,
+                    config: { ...config, text: config.text || 'Title Overlay' },
+                    builtIn: true,
+                    isCustom: true,
+                  });
+                }}
+                className="glow-btn flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-emerald-200 bg-emerald-500/12 hover:bg-emerald-500/22 border border-emerald-400/35 rounded-lg"
+                title="Save permanently inside app library to reuse in any project"
+              >
+                <BookmarkPlus className="w-3.5 h-3.5" />
+                <span>Save to App Library</span>
+              </button>
+            )}
+          </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {hasSelectedTitle && selectedTextClip && (
               <button
                 type="button"
